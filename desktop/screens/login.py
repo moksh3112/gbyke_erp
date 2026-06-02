@@ -36,7 +36,7 @@ class LoginScreen(QWidget):
 
     def _build_ui(self):
         self.setWindowTitle("G-Byke ERP — Login")
-        self.setFixedSize(420, 520)
+        self.setFixedSize(420, 540)
         self.setStyleSheet("background-color: #f5f5f5;")
 
         outer = QVBoxLayout(self)
@@ -91,10 +91,12 @@ class LoginScreen(QWidget):
                 padding: 0 12px;
                 font-size: 14px;
                 background: #fafafa;
+                color: #1a1a1a;
             }
             QLineEdit:focus {
                 border: 1px solid #2563eb;
                 background: white;
+                color: #1a1a1a;
             }
         """)
 
@@ -103,12 +105,56 @@ class LoginScreen(QWidget):
         password_label.setStyleSheet(
             "font-size: 13px; font-weight: 500; color: #333; border: none;"
         )
+
+        # Password row with show/hide toggle
+        password_row = QHBoxLayout()
+        password_row.setSpacing(0)
+
         self.password_input = QLineEdit()
         self.password_input.setPlaceholderText("Enter your password")
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.setFixedHeight(40)
-        self.password_input.setStyleSheet(self.username_input.styleSheet())
+        self.password_input.setStyleSheet("""
+            QLineEdit {
+                border: 1px solid #ddd;
+                border-radius: 6px 0px 0px 6px;
+                padding: 0 12px;
+                font-size: 14px;
+                background: #fafafa;
+                color: #1a1a1a;
+            }
+            QLineEdit:focus {
+                border: 1px solid #2563eb;
+                background: white;
+                color: #1a1a1a;
+            }
+        """)
         self.password_input.returnPressed.connect(self._do_login)
+
+        self.toggle_btn = QPushButton("👁")
+        self.toggle_btn.setFixedSize(40, 40)
+        self.toggle_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.toggle_btn.setCheckable(True)
+        self.toggle_btn.setStyleSheet("""
+            QPushButton {
+                border: 1px solid #ddd;
+                border-left: none;
+                border-radius: 0px 6px 6px 0px;
+                background: #fafafa;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background: #f0f0f0;
+            }
+            QPushButton:checked {
+                background: #eff6ff;
+                border-color: #2563eb;
+            }
+        """)
+        self.toggle_btn.clicked.connect(self._toggle_password)
+
+        password_row.addWidget(self.password_input)
+        password_row.addWidget(self.toggle_btn)
 
         # Error label
         self.error_label = QLabel("")
@@ -151,7 +197,7 @@ class LoginScreen(QWidget):
             "color: #f59e0b; font-size: 11px; border: none;"
         )
 
-        # Assemble card
+        # ── Assemble card ──────────────────────────────────────
         card_layout.addWidget(logo_label)
         card_layout.addWidget(title)
         card_layout.addWidget(subtitle)
@@ -159,7 +205,7 @@ class LoginScreen(QWidget):
         card_layout.addWidget(username_label)
         card_layout.addWidget(self.username_input)
         card_layout.addWidget(password_label)
-        card_layout.addWidget(self.password_input)
+        card_layout.addLayout(password_row)
         card_layout.addWidget(self.error_label)
         card_layout.addWidget(self.login_btn)
         card_layout.addWidget(self.server_label)
@@ -179,6 +225,14 @@ class LoginScreen(QWidget):
             self.server_label.setStyleSheet(
                 "color: #dc2626; font-size: 11px; border: none;"
             )
+
+    def _toggle_password(self, checked: bool):
+        if checked:
+            self.password_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.toggle_btn.setText("🙈")
+        else:
+            self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.toggle_btn.setText("👁")
 
     def _do_login(self):
         username = self.username_input.text().strip()
