@@ -14,7 +14,8 @@ from desktop.utils.session import Session
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("G-Byke ERP")
+        from version import VERSION
+        self.setWindowTitle(f"G-Byke ERP — v{VERSION}")
         self.setMinimumSize(1100, 680)
         self.setFont(QFont("Segoe UI", 10))
         self._show_login()

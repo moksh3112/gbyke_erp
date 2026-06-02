@@ -28,8 +28,8 @@ class Sidebar(QWidget):
         header.setStyleSheet("background-color: #0f172a;")
         header_layout = QVBoxLayout(header)
         header_layout.setContentsMargins(16, 12, 16, 12)
-
-        brand = QLabel("🛵 G-Byke ERP")
+        from version import VERSION
+        brand = QLabel(f"🛵 G-Byke ERP  v{VERSION}")
         brand.setFont(QFont("Arial", 13, QFont.Weight.Bold))
         brand.setStyleSheet("color: white;")
 

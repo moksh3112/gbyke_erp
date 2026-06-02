@@ -191,12 +191,20 @@ class LoginScreen(QWidget):
         """)
         self.login_btn.clicked.connect(self._do_login)
 
+        # Version label
+        from version import VERSION
+        version_label = QLabel(f"v{VERSION}")
+        version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        version_label.setStyleSheet(
+            "color: #cbd5e1; font-size: 10px; border: none;"
+)
+
         # Server status
         self.server_label = QLabel("● Checking server...")
         self.server_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.server_label.setStyleSheet(
             "color: #f59e0b; font-size: 11px; border: none;"
-        )
+)
 
         # ── Assemble card ──────────────────────────────────────
         card_layout.addWidget(logo_label)
@@ -210,6 +218,7 @@ class LoginScreen(QWidget):
         card_layout.addWidget(self.error_label)
         card_layout.addWidget(self.login_btn)
         card_layout.addWidget(self.server_label)
+        card_layout.addWidget(version_label)
 
         outer.addWidget(card, alignment=Qt.AlignmentFlag.AlignCenter)
         self._check_server()
