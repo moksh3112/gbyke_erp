@@ -16,7 +16,7 @@ class UserCreate(BaseModel):
     full_name: str
     username: str
     password: str
-    role: str = "user"
+    role: str = "staff"  # default is staff
 
 class UserResponse(BaseModel):
     id: str

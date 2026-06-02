@@ -103,23 +103,32 @@ class Sidebar(QWidget):
         layout.setContentsMargins(0, 0, 0, 8)
 
     def _get_nav_items(self):
+    # Available to all roles
         common = [
             ("📦", "Inventory",     "inventory"),
             ("🛵", "PDI",           "pdi"),
+        ]
+        # Manager and above
+        manager_items = [
             ("🏭", "Manufacturing", "manufacturing"),
             ("🏢", "Warehouses",    "warehouses"),
             ("🚚", "Dealers",       "dealers"),
+            ("📥", "Shipments",     "shipments"),
+            ("🔧", "Spare Parts",   "spare_parts"),
+            ("⚠️",  "Damage Log",   "damage"),
             ("📊", "Reports",       "reports"),
         ]
-        admin_only = [
-            ("📥", "Shipments",    "shipments"),
-            ("🔧", "Spare Parts",  "spare_parts"),
-            ("⚠️",  "Damage Log",  "damage"),
-            ("👥", "Users",        "users"),
+        # Super admin only
+        superadmin_items = [
+            ("👥", "Users",         "users"),
         ]
-        if Session.is_admin():
-            return common + admin_only
-        return common
+
+        if Session.role == "superadmin":
+            return common + manager_items + superadmin_items
+        elif Session.role == "manager":
+            return common + manager_items
+        else:  # staff
+            return common
 
     def _make_nav_btn(self, icon: str, label: str,
                       screen: str) -> QPushButton:

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.core.security import verify_password, create_access_token, hash_password
-from app.core.dependencies import get_current_user, require_admin
+from app.core.dependencies import get_current_user, require_superadmin
 from app.models import User
 from app.schemas.auth import LoginRequest, TokenResponse, UserCreate, UserResponse
 from typing import List
@@ -14,7 +14,6 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 @router.post("/login", response_model=TokenResponse)
 def login(request: LoginRequest, db: Session = Depends(get_db)):
-    # Find user
     user = db.query(User).filter(User.username == request.username).first()
 
     if not user:
@@ -35,7 +34,6 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
             detail="Incorrect username or password."
         )
 
-    # Create token
     token = create_access_token(data={
         "sub": user.id,
         "role": user.role,
@@ -57,15 +55,14 @@ def get_me(current_user: User = Depends(get_current_user)):
     return current_user
 
 
-# ── CREATE USER (admin only) ──────────────────────────────────
+# ── CREATE USER (superadmin only) ─────────────────────────────
 
 @router.post("/users", response_model=UserResponse)
 def create_user(
     data: UserCreate,
     db: Session = Depends(get_db),
-    admin: User = Depends(require_admin)
+    admin: User = Depends(require_superadmin)
 ):
-    # Check username not already taken
     existing = db.query(User).filter(User.username == data.username).first()
     if existing:
         raise HTTPException(
@@ -73,10 +70,10 @@ def create_user(
             detail=f"Username '{data.username}' is already taken."
         )
 
-    if data.role not in ["admin", "user"]:
+    if data.role not in ["superadmin", "manager", "staff"]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Role must be 'admin' or 'user'."
+            detail="Role must be 'superadmin', 'manager', or 'staff'."
         )
 
     new_user = User(
@@ -91,33 +88,36 @@ def create_user(
     return new_user
 
 
-# ── LIST ALL USERS (admin only) ───────────────────────────────
+# ── LIST ALL USERS (superadmin only) ──────────────────────────
 
 @router.get("/users", response_model=List[UserResponse])
 def list_users(
     db: Session = Depends(get_db),
-    admin: User = Depends(require_admin)
+    admin: User = Depends(require_superadmin)
 ):
     return db.query(User).all()
 
 
-# ── DISABLE / ENABLE USER (admin only) ───────────────────────
+# ── DISABLE / ENABLE USER (superadmin only) ───────────────────
 
 @router.patch("/users/{user_id}/toggle")
 def toggle_user(
     user_id: str,
     db: Session = Depends(get_db),
-    admin: User = Depends(require_admin)
+    admin: User = Depends(require_superadmin)
 ):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found.")
     if user.id == admin.id:
-        raise HTTPException(status_code=400, detail="You cannot disable your own account.")
+        raise HTTPException(
+            status_code=400,
+            detail="You cannot disable your own account."
+        )
 
     user.is_active = not user.is_active
     db.commit()
     return {
-        "message": f"User '{user.username}' has been {'enabled' if user.is_active else 'disabled'}.",
+        "message": f"User '{user.username}' {'enabled' if user.is_active else 'disabled'}.",
         "is_active": user.is_active
     }

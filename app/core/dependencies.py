@@ -33,18 +33,39 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="User not found or account disabled."
         )
-
     return user
 
 
-def require_admin(current_user: User = Depends(get_current_user)) -> User:
-    if current_user.role != "admin":
+def require_superadmin(current_user: User = Depends(get_current_user)) -> User:
+    """Only you — full access including financials and account management."""
+    if current_user.role != "superadmin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required for this action."
+            detail="Super Admin access required."
         )
     return current_user
 
 
-def require_user(current_user: User = Depends(get_current_user)) -> User:
+def require_manager_or_above(current_user: User = Depends(get_current_user)) -> User:
+    """Manager and Super Admin — all operations except financials."""
+    if current_user.role not in ["superadmin", "manager"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Manager access required."
+        )
     return current_user
+
+
+def require_any_role(current_user: User = Depends(get_current_user)) -> User:
+    """All logged-in users — view stock, mark consumed/defective, update PDI."""
+    return current_user
+
+
+def is_superadmin(user: User) -> bool:
+    return user.role == "superadmin"
+
+def can_see_financials(user: User) -> bool:
+    return user.role == "superadmin"
+
+def can_manage_accounts(user: User) -> bool:
+    return user.role == "superadmin"

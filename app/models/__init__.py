@@ -16,8 +16,9 @@ def gen_uuid():
 # ── ENUMS ─────────────────────────────────────────────────────
 
 class UserRole(str, enum.Enum):
-    admin = "admin"
-    user = "user"
+    superadmin = "superadmin"
+    manager = "manager"
+    staff = "staff"
 
 class VehicleStatus(str, enum.Enum):
     manufacturing_pending = "manufacturing_pending"
@@ -78,7 +79,7 @@ class User(Base):
     full_name       = Column(String(100), nullable=False)
     username        = Column(String(50), unique=True, nullable=False, index=True)
     hashed_password = Column(String(255), nullable=False)
-    role            = Column(Enum(UserRole), nullable=False, default=UserRole.user)
+    role            = Column(Enum(UserRole), nullable=False, default=UserRole.staff)
     is_active       = Column(Boolean, default=True)
     created_at      = Column(DateTime(timezone=True), server_default=func.now())
     updated_at      = Column(DateTime(timezone=True), onupdate=func.now())
