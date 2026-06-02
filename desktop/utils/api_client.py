@@ -1,18 +1,16 @@
 import requests
 from desktop.utils.session import Session
 
-# ── CHANGE THIS TO YOUR CAMERA PC's LOCAL IP WHEN DEPLOYING ──
-SERVER_IP = "127.0.0.1"
+# ── CHANGE THIS TO CAMERA PC's LOCAL IP WHEN DEPLOYING ────────
+SERVER_IP   = "127.0.0.1"
 SERVER_PORT = 8000
-BASE_URL = f"http://{SERVER_IP}:{SERVER_PORT}"
-
-TIMEOUT = 10  # seconds
+BASE_URL    = f"http://{SERVER_IP}:{SERVER_PORT}"
+TIMEOUT     = 10
 
 
 class APIError(Exception):
-    """Raised when the API returns an error."""
     def __init__(self, message: str, status_code: int = None):
-        self.message = message
+        self.message     = message
         self.status_code = status_code
         super().__init__(message)
 
@@ -33,10 +31,9 @@ class APIClient:
         except Exception:
             data = {}
 
-        if response.status_code == 200 or response.status_code == 201:
+        if response.status_code in [200, 201]:
             return data
 
-        # Extract error detail
         detail = data.get("detail", f"Server error {response.status_code}")
         raise APIError(detail, response.status_code)
 
@@ -83,6 +80,24 @@ class APIClient:
             response = requests.patch(
                 f"{BASE_URL}{endpoint}",
                 json=data or {},
+                headers=cls._headers(),
+                timeout=TIMEOUT
+            )
+            return cls._handle_response(response)
+        except requests.exceptions.ConnectionError:
+            raise APIError("Cannot connect to server. Check that the server is running.")
+        except requests.exceptions.Timeout:
+            raise APIError("Server took too long to respond. Try again.")
+        except APIError:
+            raise
+        except Exception as e:
+            raise APIError(f"Unexpected error: {str(e)}")
+
+    @classmethod
+    def delete(cls, endpoint: str) -> dict:
+        try:
+            response = requests.delete(
+                f"{BASE_URL}{endpoint}",
                 headers=cls._headers(),
                 timeout=TIMEOUT
             )

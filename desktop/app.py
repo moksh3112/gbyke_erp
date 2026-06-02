@@ -61,17 +61,22 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(container)
 
     def _on_nav(self, screen: str):
-        # Placeholder — each day we'll add real screens here
-        from PyQt6.QtWidgets import QLabel
-        placeholder = QWidget()
-        lay = QHBoxLayout(placeholder)
-        lbl = QLabel(f"📋  {screen.title()} module — coming soon")
-        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl.setStyleSheet("color: #94a3b8; font-size: 16px;")
-        lay.addWidget(lbl)
-        self.content.addWidget(placeholder)
-        self.content.setCurrentWidget(placeholder)
+    # Import screens
+        if screen == "inventory":
+            from desktop.screens.inventory import InventoryScreen
+            widget = InventoryScreen()
+        else:
+            widget = QWidget()
+            from PyQt6.QtWidgets import QLabel
+            lay = QHBoxLayout(widget)
+            lbl = QLabel(f"📋  {screen.title()} module — coming soon")
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("color:#94a3b8; font-size:16px;")
+            lay.addWidget(lbl)
 
+        self.content.addWidget(widget)
+        self.content.setCurrentWidget(widget)
+        
     def _on_logout(self):
         reply = QMessageBox.question(
             self, "Logout",

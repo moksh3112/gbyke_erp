@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.database import Base, engine, test_connection
-from app.routers import auth
+from app.routers import auth, inventory
 import app.models
 
 @asynccontextmanager
@@ -13,15 +13,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="G-Byke ERP",
-    version="1.0.0",
+    version="1.0.2",
     lifespan=lifespan
 )
 
 app.include_router(auth.router)
+app.include_router(inventory.router)
 
 @app.get("/")
 def root():
-    return {"status": "G-Byke ERP server is running", "version": "1.0.0"}
+    return {"status": "G-Byke ERP server is running", "version": "1.0.2"}
 
 @app.get("/health")
 def health():
@@ -29,12 +30,8 @@ def health():
 
 @app.get("/version")
 def get_version():
-    """
-    Desktop app calls this on startup to check if an update is available.
-    When you push a new version, bump the number here and in version.py.
-    """
     return {
         "version": "1.0.2",
-        "force_update": False,      # set True to force all clients to update
-        "update_message": ""        # shown to user when update is available
+        "force_update": False,
+        "update_message": ""
     }
