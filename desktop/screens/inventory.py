@@ -12,7 +12,7 @@ from desktop.utils.api_client import APIClient, APIError
 from desktop.utils.session import Session
 
 
-# ── WORKER THREADS ────────────────────────────────────────────
+# ── WORKERS ───────────────────────────────────────────────────
 
 class LoadInventoryWorker(QThread):
     done  = pyqtSignal(list)
@@ -42,18 +42,34 @@ class LoadSummaryWorker(QThread):
 
     def run(self):
         try:
-            result = APIClient.get("/inventory/summary")
-            self.done.emit(result)
+            self.done.emit(APIClient.get("/inventory/summary"))
         except APIError:
             self.done.emit({})
 
 
+class LoadLocationStockWorker(QThread):
+    done = pyqtSignal(str, list)
+
+    def __init__(self, item_id: str):
+        super().__init__()
+        self.item_id = item_id
+
+    def run(self):
+        try:
+            result = APIClient.get(
+                f"/inventory/items/{self.item_id}/locations"
+            )
+            self.done.emit(self.item_id, result)
+        except APIError:
+            self.done.emit(self.item_id, [])
+
+
 # ── SKU GENERATOR ─────────────────────────────────────────────
 
-def generate_sku(model_name: str, part_name: str, colour: str = "") -> str:
+def generate_sku(model_name: str, part_name: str,
+                 colour: str = "") -> str:
     def clean(text):
         return text.upper().replace(" ", "").replace("-", "")[:8]
-
     sku = f"{clean(model_name)}-{clean(part_name)}"
     if colour.strip():
         sku += f"-{clean(colour)}"
@@ -67,7 +83,6 @@ class SearchableInput(QWidget):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-
         self.input = QLineEdit()
         self.input.setPlaceholderText(placeholder)
         self.input.setFixedHeight(36)
@@ -96,11 +111,14 @@ class SearchableInput(QWidget):
 # ── IMPORT FORM ───────────────────────────────────────────────
 
 class ImportForm(QWidget):
-    def __init__(self, model_names: list, part_names: list, parent=None):
+    def __init__(self, model_names, part_names, locations, parent=None):
         super().__init__(parent)
-        self._build_ui(model_names, part_names)
+        self._model_names = model_names
+        self._part_names  = part_names
+        self._locations   = locations
+        self._build_ui()
 
-    def _build_ui(self, model_names, part_names):
+    def _build_ui(self):
         layout = QFormLayout(self)
         layout.setSpacing(12)
         layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -109,15 +127,11 @@ class ImportForm(QWidget):
         )
         layout.setHorizontalSpacing(16)
 
-        lbl = "font-size:13px; font-weight:500; color:#374151;"
-        inp = (
-            "border:1px solid #ddd; border-radius:4px;"
-            "padding:0 8px; color:#1a1a1a; background:white;"
-        )
-        spin_style = (
-            "color:#1a1a1a; background:white;"
-            "border:1px solid #ddd; border-radius:4px; padding:0 8px;"
-        )
+        lbl  = "font-size:13px; font-weight:500; color:#374151;"
+        inp  = ("border:1px solid #ddd; border-radius:4px;"
+                "padding:0 8px; color:#1a1a1a; background:white;")
+        spin = ("color:#1a1a1a; background:white; border:1px solid #ddd;"
+                "border-radius:4px; padding:0 8px;")
 
         # Date
         self.date_input = QDateEdit()
@@ -125,25 +139,33 @@ class ImportForm(QWidget):
         self.date_input.setCalendarPopup(True)
         self.date_input.setFixedHeight(36)
         self.date_input.setStyleSheet(inp)
-        date_lbl = QLabel("Date *")
-        date_lbl.setStyleSheet(lbl)
-        layout.addRow(date_lbl, self.date_input)
+        d = QLabel("Date *"); d.setStyleSheet(lbl)
+        layout.addRow(d, self.date_input)
 
-        # Model
-        self.model_input = SearchableInput("Type or select model name...")
-        self.model_input.set_items(model_names)
-        self.model_input.input.textChanged.connect(self._update_sku)
-        model_lbl = QLabel("Scooter Model *")
-        model_lbl.setStyleSheet(lbl)
-        layout.addRow(model_lbl, self.model_input)
+        # Model — dropdown with blank first item
+        self.model_combo = QComboBox()
+        self.model_combo.setFixedHeight(36)
+        self.model_combo.setStyleSheet(inp)
+        self.model_combo.setEditable(True)
+        self.model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.model_combo.lineEdit().setPlaceholderText(
+            "Select or type model name..."
+        )
+        self.model_combo.lineEdit().setStyleSheet("color:#1a1a1a;")
+        self.model_combo.addItem("-- Select Model --", "")
+        self.model_combo.addItems(self._model_names)
+        self.model_combo.setCurrentIndex(0)
+        self.model_combo.lineEdit().clear()  # ← add this line
+        self.model_combo.currentTextChanged.connect(self._update_sku)
+        m = QLabel("Scooter Model *"); m.setStyleSheet(lbl)
+        layout.addRow(m, self.model_combo)
 
         # Part
         self.part_input = SearchableInput("Type or select part name...")
-        self.part_input.set_items(part_names)
+        self.part_input.set_items(self._part_names)
         self.part_input.input.textChanged.connect(self._update_sku)
-        part_lbl = QLabel("Part Name *")
-        part_lbl.setStyleSheet(lbl)
-        layout.addRow(part_lbl, self.part_input)
+        p = QLabel("Part Name *"); p.setStyleSheet(lbl)
+        layout.addRow(p, self.part_input)
 
         # Colour
         self.colour_input = QLineEdit()
@@ -153,9 +175,22 @@ class ImportForm(QWidget):
         self.colour_input.setFixedHeight(36)
         self.colour_input.setStyleSheet(inp)
         self.colour_input.textChanged.connect(self._update_sku)
-        colour_lbl = QLabel("Colour")
-        colour_lbl.setStyleSheet(lbl)
-        layout.addRow(colour_lbl, self.colour_input)
+        c = QLabel("Colour"); c.setStyleSheet(lbl)
+        layout.addRow(c, self.colour_input)
+
+        # Location
+        self.location_combo = QComboBox()
+        self.location_combo.setFixedHeight(36)
+        self.location_combo.setStyleSheet(inp)
+        self.location_combo.addItem("-- Select Location --", "")
+        for loc in self._locations:
+            icon = {"factory": "🏭", "warehouse": "🏢",
+                    "godown": "📦"}.get(loc.get("location_type", ""), "📍")
+            self.location_combo.addItem(
+                f"{icon}  {loc['name']}", loc["id"]
+            )
+        l = QLabel("Location"); l.setStyleSheet(lbl)
+        layout.addRow(l, self.location_combo)
 
         # Quantity
         self.qty_spin = QSpinBox()
@@ -163,10 +198,9 @@ class ImportForm(QWidget):
         self.qty_spin.setMinimum(1)
         self.qty_spin.setMaximum(999999)
         self.qty_spin.setValue(1)
-        self.qty_spin.setStyleSheet(spin_style)
-        qty_lbl = QLabel("Quantity *")
-        qty_lbl.setStyleSheet(lbl)
-        layout.addRow(qty_lbl, self.qty_spin)
+        self.qty_spin.setStyleSheet(spin)
+        q = QLabel("Quantity *"); q.setStyleSheet(lbl)
+        layout.addRow(q, self.qty_spin)
 
         # SKU preview
         self.sku_label = QLabel("Auto SKU: —")
@@ -176,10 +210,10 @@ class ImportForm(QWidget):
         layout.addRow("", self.sku_label)
 
     def _update_sku(self):
-        model  = self.model_input.text()
+        model  = self.model_combo.currentText().strip()
         part   = self.part_input.text()
         colour = self.colour_input.text().strip()
-        if model and part:
+        if model and model != "-- Select Model --" and part:
             self.sku_label.setText(
                 f"Auto SKU: {generate_sku(model, part, colour)}"
             )
@@ -187,34 +221,40 @@ class ImportForm(QWidget):
             self.sku_label.setText("Auto SKU: —")
 
     def validate(self) -> str:
-        if not self.model_input.text():
-            return "Please enter the scooter model name."
+        model = self.model_combo.currentText().strip()
+        if not model or model == "-- Select Model --":
+            return "Please select or enter the scooter model name."
         if not self.part_input.text():
             return "Please enter the part name."
         return ""
 
     def get_data(self) -> dict:
-        model  = self.model_input.text()
+        model  = self.model_combo.currentText().strip()
+        if model == "-- Select Model --":
+            model = ""
         part   = self.part_input.text()
         colour = self.colour_input.text().strip()
         return {
-            "date":     self.date_input.date().toString("yyyy-MM-dd"),
-            "model":    model,
-            "part":     part,
-            "colour":   colour,
-            "quantity": self.qty_spin.value(),
-            "sku":      generate_sku(model, part, colour),
+            "date":        self.date_input.date().toString("yyyy-MM-dd"),
+            "model":       model,
+            "part":        part,
+            "colour":      colour,
+            "quantity":    self.qty_spin.value(),
+            "sku":         generate_sku(model, part, colour),
+            "location_id": self.location_combo.currentData() or None,
         }
 
 
 # ── DEFECTIVE FORM ────────────────────────────────────────────
 
 class DefectiveForm(QWidget):
-    def __init__(self, model_names: list, part_names: list, parent=None):
+    def __init__(self, model_names, part_names, parent=None):
         super().__init__(parent)
-        self._build_ui(model_names, part_names)
+        self._model_names = model_names
+        self._part_names  = part_names
+        self._build_ui()
 
-    def _build_ui(self, model_names, part_names):
+    def _build_ui(self):
         layout = QFormLayout(self)
         layout.setSpacing(12)
         layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -223,29 +263,34 @@ class DefectiveForm(QWidget):
         )
         layout.setHorizontalSpacing(16)
 
-        lbl = "font-size:13px; font-weight:500; color:#374151;"
-        inp = (
-            "border:1px solid #ddd; border-radius:4px;"
-            "padding:0 8px; color:#1a1a1a; background:white;"
-        )
-        spin_style = (
-            "color:#1a1a1a; background:white;"
-            "border:1px solid #ddd; border-radius:4px; padding:0 8px;"
-        )
+        lbl  = "font-size:13px; font-weight:500; color:#374151;"
+        inp  = ("border:1px solid #ddd; border-radius:4px;"
+                "padding:0 8px; color:#1a1a1a; background:white;")
+        spin = ("color:#1a1a1a; background:white; border:1px solid #ddd;"
+                "border-radius:4px; padding:0 8px;")
 
-        # Model
-        self.model_input = SearchableInput("Type or select model name...")
-        self.model_input.set_items(model_names)
-        model_lbl = QLabel("Scooter Model *")
-        model_lbl.setStyleSheet(lbl)
-        layout.addRow(model_lbl, self.model_input)
+        # Model — blank first item
+        self.model_combo = QComboBox()
+        self.model_combo.setFixedHeight(36)
+        self.model_combo.setStyleSheet(inp)
+        self.model_combo.setEditable(True)
+        self.model_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.model_combo.lineEdit().setPlaceholderText(
+            "Select or type model name..."
+        )
+        self.model_combo.lineEdit().setStyleSheet("color:#1a1a1a;")
+        self.model_combo.addItem("-- Select Model --", "")
+        self.model_combo.addItems(self._model_names)
+        self.model_combo.setCurrentIndex(0)
+        self.model_combo.lineEdit().clear()  # ← add this line
+        m = QLabel("Scooter Model *"); m.setStyleSheet(lbl)
+        layout.addRow(m, self.model_combo)
 
         # Part
         self.part_input = SearchableInput("Type or select part name...")
-        self.part_input.set_items(part_names)
-        part_lbl = QLabel("Part Name *")
-        part_lbl.setStyleSheet(lbl)
-        layout.addRow(part_lbl, self.part_input)
+        self.part_input.set_items(self._part_names)
+        p = QLabel("Part Name *"); p.setStyleSheet(lbl)
+        layout.addRow(p, self.part_input)
 
         # Quantity
         self.qty_spin = QSpinBox()
@@ -253,10 +298,9 @@ class DefectiveForm(QWidget):
         self.qty_spin.setMinimum(1)
         self.qty_spin.setMaximum(999999)
         self.qty_spin.setValue(1)
-        self.qty_spin.setStyleSheet(spin_style)
-        qty_lbl = QLabel("Quantity *")
-        qty_lbl.setStyleSheet(lbl)
-        layout.addRow(qty_lbl, self.qty_spin)
+        self.qty_spin.setStyleSheet(spin)
+        q = QLabel("Quantity *"); q.setStyleSheet(lbl)
+        layout.addRow(q, self.qty_spin)
 
         # Type
         self.type_combo = QComboBox()
@@ -264,29 +308,31 @@ class DefectiveForm(QWidget):
         self.type_combo.setStyleSheet(inp)
         self.type_combo.addItem("Defective (faulty / not working)", "defective")
         self.type_combo.addItem("Damaged (physically damaged)",     "damaged")
-        type_lbl = QLabel("Type *")
-        type_lbl.setStyleSheet(lbl)
-        layout.addRow(type_lbl, self.type_combo)
+        t = QLabel("Type *"); t.setStyleSheet(lbl)
+        layout.addRow(t, self.type_combo)
 
         # Notes
         self.notes_input = QTextEdit()
         self.notes_input.setFixedHeight(60)
         self.notes_input.setPlaceholderText("Optional: describe the issue...")
         self.notes_input.setStyleSheet("color:#1a1a1a;")
-        notes_lbl = QLabel("Notes")
-        notes_lbl.setStyleSheet(lbl)
-        layout.addRow(notes_lbl, self.notes_input)
+        n = QLabel("Notes"); n.setStyleSheet(lbl)
+        layout.addRow(n, self.notes_input)
 
     def validate(self) -> str:
-        if not self.model_input.text():
-            return "Please enter the scooter model name."
+        model = self.model_combo.currentText().strip()
+        if not model or model == "-- Select Model --":
+            return "Please select or enter the scooter model name."
         if not self.part_input.text():
             return "Please enter the part name."
         return ""
 
     def get_data(self) -> dict:
+        model = self.model_combo.currentText().strip()
+        if model == "-- Select Model --":
+            model = ""
         return {
-            "model":    self.model_input.text(),
+            "model":    model,
             "part":     self.part_input.text(),
             "quantity": self.qty_spin.value(),
             "type":     self.type_combo.currentData(),
@@ -294,18 +340,17 @@ class DefectiveForm(QWidget):
         }
 
 
-# ── ADD STOCK ENTRY DIALOG ────────────────────────────────────
+# ── ADD STOCK DIALOG ──────────────────────────────────────────
 
 class AddItemDialog(QDialog):
-    def __init__(self, parent=None, existing_items=None, model_names=None):
+    def __init__(self, parent=None, existing_items=None,
+                 model_names=None, locations=None):
         super().__init__(parent)
         self.existing_items = existing_items or []
         self.result_data    = {}
-        self.model_names    = model_names or sorted(set(
-            i.get("model_name", "") for i in self.existing_items
-            if i.get("model_name")
-        ))
-        self.part_names = sorted(set(
+        self.model_names    = model_names or []
+        self.locations      = locations   or []
+        self.part_names     = sorted(set(
             i.get("item_name", "") for i in self.existing_items
             if i.get("item_name")
         ))
@@ -319,13 +364,10 @@ class AddItemDialog(QDialog):
         layout.setSpacing(14)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        # Type selector
         type_row = QHBoxLayout()
-        type_lbl = QLabel("Entry Type:")
-        type_lbl.setStyleSheet(
-            "font-size:13px; font-weight:500; color:#374151;"
-        )
-        type_row.addWidget(type_lbl)
+        tl = QLabel("Entry Type:")
+        tl.setStyleSheet("font-size:13px; font-weight:500; color:#374151;")
+        type_row.addWidget(tl)
 
         self.type_combo = QComboBox()
         self.type_combo.setFixedHeight(36)
@@ -339,21 +381,22 @@ class AddItemDialog(QDialog):
         type_row.addWidget(self.type_combo, 1)
         layout.addLayout(type_row)
 
-        # Divider
         div = QFrame()
         div.setFrameShape(QFrame.Shape.HLine)
         div.setStyleSheet("color:#e5e7eb;")
         layout.addWidget(div)
 
-        # Stacked forms
         self.stack = QStackedWidget()
-        self.import_form    = ImportForm(self.model_names, self.part_names)
-        self.defective_form = DefectiveForm(self.model_names, self.part_names)
+        self.import_form    = ImportForm(
+            self.model_names, self.part_names, self.locations
+        )
+        self.defective_form = DefectiveForm(
+            self.model_names, self.part_names
+        )
         self.stack.addWidget(self.import_form)
         self.stack.addWidget(self.defective_form)
         layout.addWidget(self.stack)
 
-        # Buttons
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
 
@@ -417,6 +460,146 @@ class AddItemDialog(QDialog):
         self.accept()
 
 
+# ── MOVE STOCK DIALOG ─────────────────────────────────────────
+
+class MoveStockDialog(QDialog):
+    def __init__(self, parent, item, location_stocks, all_locations):
+        super().__init__(parent)
+        self.item            = item
+        self.location_stocks = location_stocks
+        self.all_locations   = all_locations
+        self.setWindowTitle(f"Move Stock — {item['item_name']}")
+        self.setFixedWidth(460)
+        self.setModal(True)
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        info = QLabel(
+            f"Total stock: {self.item['remaining_quantity']} pcs"
+        )
+        info.setStyleSheet(
+            "background:#eff6ff; color:#1d4ed8;"
+            "padding:8px 12px; border-radius:6px;"
+        )
+        layout.addWidget(info)
+
+        form = QFormLayout()
+        form.setSpacing(12)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
+        form.setHorizontalSpacing(16)
+
+        lbl  = "font-size:13px; font-weight:500; color:#374151;"
+        inp  = ("border:1px solid #ddd; border-radius:4px;"
+                "padding:0 8px; color:#1a1a1a; background:white;")
+        spin = ("color:#1a1a1a; background:white; border:1px solid #ddd;"
+                "border-radius:4px; padding:0 8px;")
+
+        # From location
+        self.from_combo = QComboBox()
+        self.from_combo.setFixedHeight(36)
+        self.from_combo.setStyleSheet(inp)
+        for ls in self.location_stocks:
+            icon = {"factory": "🏭", "warehouse": "🏢",
+                    "godown": "📦"}.get(ls.get("location_type", ""), "📍")
+            self.from_combo.addItem(
+                f"{icon}  {ls['location_name']}  ({ls['quantity']} pcs)",
+                ls["location_id"]
+            )
+        self.from_combo.currentIndexChanged.connect(self._update_max)
+        fl = QLabel("From Location *"); fl.setStyleSheet(lbl)
+        form.addRow(fl, self.from_combo)
+
+        # To location
+        self.to_combo = QComboBox()
+        self.to_combo.setFixedHeight(36)
+        self.to_combo.setStyleSheet(inp)
+        for loc in self.all_locations:
+            icon = {"factory": "🏭", "warehouse": "🏢",
+                    "godown": "📦"}.get(loc.get("location_type", ""), "📍")
+            self.to_combo.addItem(
+                f"{icon}  {loc['name']}", loc["id"]
+            )
+        tl = QLabel("To Location *"); tl.setStyleSheet(lbl)
+        form.addRow(tl, self.to_combo)
+
+        # Quantity
+        self.qty_spin = QSpinBox()
+        self.qty_spin.setFixedHeight(36)
+        self.qty_spin.setMinimum(1)
+        self.qty_spin.setMaximum(
+            self.location_stocks[0]["quantity"]
+            if self.location_stocks else 1
+        )
+        self.qty_spin.setStyleSheet(spin)
+        ql = QLabel("Quantity *"); ql.setStyleSheet(lbl)
+        form.addRow(ql, self.qty_spin)
+
+        # Available hint
+        self.avail_label = QLabel("")
+        self.avail_label.setStyleSheet(
+            "color:#6b7280; font-size:11px; font-style:italic;"
+        )
+        self._update_max(0)
+        form.addRow("", self.avail_label)
+
+        # Notes
+        self.notes_input = QTextEdit()
+        self.notes_input.setFixedHeight(60)
+        self.notes_input.setPlaceholderText("Optional notes...")
+        self.notes_input.setStyleSheet("color:#1a1a1a;")
+        nl = QLabel("Notes"); nl.setStyleSheet(lbl)
+        form.addRow(nl, self.notes_input)
+
+        layout.addLayout(form)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFixedHeight(38)
+        cancel_btn.clicked.connect(self.reject)
+        cancel_btn.setStyleSheet(
+            "border:1px solid #ddd; border-radius:6px;"
+            "color:#666; font-size:13px;"
+        )
+
+        move_btn = QPushButton("Move Stock")
+        move_btn.setFixedHeight(38)
+        move_btn.setDefault(True)
+        move_btn.setStyleSheet(
+            "background:#7c3aed; color:white; border:none;"
+            "border-radius:6px; font-weight:600; font-size:13px;"
+        )
+        move_btn.clicked.connect(self.accept)
+
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(move_btn)
+        layout.addLayout(btn_row)
+
+    def _update_max(self, index):
+        if index < len(self.location_stocks):
+            available = self.location_stocks[index]["quantity"]
+            self.qty_spin.setMaximum(available)
+            self.avail_label.setText(
+                f"Available at this location: {available} pcs"
+            )
+
+    def get_data(self) -> dict:
+        return {
+            "from_location_id": self.from_combo.currentData(),
+            "to_location_id":   self.to_combo.currentData(),
+            "quantity":         self.qty_spin.value(),
+            "notes":            self.notes_input.toPlainText().strip() or None
+        }
+
+
 # ── ADJUST STOCK DIALOG ───────────────────────────────────────
 
 class AdjustDialog(QDialog):
@@ -451,10 +634,8 @@ class AdjustDialog(QDialog):
         form.setHorizontalSpacing(16)
 
         lbl = "font-size:13px; font-weight:500; color:#374151;"
-        inp = (
-            "border:1px solid #ddd; border-radius:4px;"
-            "padding:0 8px; color:#1a1a1a; background:white;"
-        )
+        inp = ("border:1px solid #ddd; border-radius:4px;"
+               "padding:0 8px; color:#1a1a1a; background:white;")
 
         self.type_combo = QComboBox()
         self.type_combo.setFixedHeight(36)
@@ -466,29 +647,26 @@ class AdjustDialog(QDialog):
             self.type_combo.addItem(
                 "Manual Adjustment (add stock)", "adjusted"
             )
-        action_lbl = QLabel("Action")
-        action_lbl.setStyleSheet(lbl)
-        form.addRow(action_lbl, self.type_combo)
+        al = QLabel("Action"); al.setStyleSheet(lbl)
+        form.addRow(al, self.type_combo)
 
         self.qty_spin = QSpinBox()
         self.qty_spin.setFixedHeight(36)
         self.qty_spin.setMinimum(1)
         self.qty_spin.setMaximum(999999)
         self.qty_spin.setStyleSheet(
-            "color:#1a1a1a; background:white;"
-            "border:1px solid #ddd; border-radius:4px; padding:0 8px;"
+            "color:#1a1a1a; background:white; border:1px solid #ddd;"
+            "border-radius:4px; padding:0 8px;"
         )
-        qty_lbl = QLabel("Quantity")
-        qty_lbl.setStyleSheet(lbl)
-        form.addRow(qty_lbl, self.qty_spin)
+        ql = QLabel("Quantity"); ql.setStyleSheet(lbl)
+        form.addRow(ql, self.qty_spin)
 
         self.notes_input = QTextEdit()
         self.notes_input.setFixedHeight(70)
         self.notes_input.setPlaceholderText("Optional notes...")
         self.notes_input.setStyleSheet("color:#1a1a1a;")
-        notes_lbl = QLabel("Notes")
-        notes_lbl.setStyleSheet(lbl)
-        form.addRow(notes_lbl, self.notes_input)
+        nl = QLabel("Notes"); nl.setStyleSheet(lbl)
+        form.addRow(nl, self.notes_input)
 
         layout.addLayout(form)
 
@@ -518,13 +696,55 @@ class AdjustDialog(QDialog):
         layout.addLayout(btn_row)
 
 
+# ── LOCATION BREAKDOWN WIDGET ─────────────────────────────────
+
+class LocationBreakdownWidget(QWidget):
+    def __init__(self, location_stocks: list, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("background:#f8fafc;")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(32, 4, 8, 4)
+        layout.setSpacing(8)
+
+        if not location_stocks:
+            lbl = QLabel("No location data recorded")
+            lbl.setStyleSheet("color:#94a3b8; font-size:12px;")
+            layout.addWidget(lbl)
+            return
+
+        type_icons = {
+            "factory":   "🏭",
+            "warehouse": "🏢",
+            "godown":    "📦"
+        }
+
+        for ls in location_stocks:
+            icon  = type_icons.get(ls.get("location_type", ""), "📍")
+            badge = QLabel(
+                f"{icon} {ls['location_name']}: {ls['quantity']} pcs"
+            )
+            badge.setStyleSheet("""
+                background:#f0fdf4; color:#166534;
+                border:1px solid #bbf7d0;
+                border-radius:4px;
+                padding:3px 10px;
+                font-size:12px;
+                font-weight:500;
+            """)
+            layout.addWidget(badge)
+
+        layout.addStretch()
+
+
 # ── MAIN INVENTORY SCREEN ─────────────────────────────────────
 
 class InventoryScreen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.items   = []
-        self.workers = []
+        self.items          = []
+        self.workers        = []
+        self.expanded_rows  = {}
+        self.location_cache = {}
         self._build_ui()
         self._load_summary()
         self._load_items()
@@ -534,7 +754,7 @@ class InventoryScreen(QWidget):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
-        # ── Header ────────────────────────────────────────────
+        # Header
         header_row = QHBoxLayout()
         title = QLabel("📦 Inventory")
         title.setFont(QFont("Arial", 18, QFont.Weight.Bold))
@@ -558,21 +778,19 @@ class InventoryScreen(QWidget):
 
         layout.addLayout(header_row)
 
-        # ── Summary cards ─────────────────────────────────────
+        # Summary cards
         summary_row = QHBoxLayout()
         summary_row.setSpacing(10)
-
         self.total_card     = self._stat_card("Total Items",     "—", "#2563eb")
         self.low_card       = self._stat_card("Low Stock",       "—", "#dc2626")
         self.consumed_card  = self._stat_card("Total Consumed",  "—", "#f59e0b")
         self.defective_card = self._stat_card("Total Defective", "—", "#7c3aed")
-
         for c in [self.total_card, self.low_card,
                   self.consumed_card, self.defective_card]:
             summary_row.addWidget(c)
         layout.addLayout(summary_row)
 
-        # ── Filters ───────────────────────────────────────────
+        # Filters
         filter_row = QHBoxLayout()
         filter_row.setSpacing(8)
 
@@ -616,26 +834,30 @@ class InventoryScreen(QWidget):
         filter_row.addWidget(refresh_btn)
         layout.addLayout(filter_row)
 
-        # ── Table ─────────────────────────────────────────────
+        # Table
         self.table = QTableWidget()
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
-            "Part Name", "Model", "Colour", "SKU",
-            "Remaining", "Consumed", "Defective", "Actions"
+            "", "Part Name", "Model", "Colour",
+            "SKU", "Total Stock", "Consumed", "Defective", "Actions"
         ])
         self.table.horizontalHeader().setSectionResizeMode(
-            0, QHeaderView.ResizeMode.Stretch
+            0, QHeaderView.ResizeMode.Fixed
+        )
+        self.table.setColumnWidth(0, 50)
+        self.table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
         )
         self.table.horizontalHeader().setSectionResizeMode(
-            7, QHeaderView.ResizeMode.Fixed
+            8, QHeaderView.ResizeMode.Fixed
         )
-        self.table.setColumnWidth(1, 120)
-        self.table.setColumnWidth(2, 80)
-        self.table.setColumnWidth(3, 160)
-        self.table.setColumnWidth(4, 90)
+        self.table.setColumnWidth(2, 110)
+        self.table.setColumnWidth(3, 70)
+        self.table.setColumnWidth(4, 140)
         self.table.setColumnWidth(5, 90)
         self.table.setColumnWidth(6, 90)
-        self.table.setColumnWidth(7, 220)
+        self.table.setColumnWidth(7, 90)
+        self.table.setColumnWidth(8, 240)
         self.table.verticalHeader().setDefaultSectionSize(42)
         self.table.setSelectionBehavior(
             QAbstractItemView.SelectionBehavior.SelectRows
@@ -656,8 +878,16 @@ class InventoryScreen(QWidget):
                 border:none; border-bottom:1px solid #e5e7eb;
                 font-weight:600; color:#374151;
             }
-            QTableWidget::item { padding:6px 8px; color:#1a1a1a; }
+            QTableWidget::item {
+                padding:6px 8px; color:#1a1a1a;
+            }
             QTableWidget::item:alternate { background:#f9fafb; }
+            QTableWidget::item:selected {
+                background:#eff6ff; color:#1a1a1a;
+            }
+            QTableWidget::item:hover {
+                background:transparent;
+            }
         """)
         layout.addWidget(self.table)
 
@@ -695,7 +925,7 @@ class InventoryScreen(QWidget):
                 child.setText(str(value))
                 break
 
-    # ── DATA LOADING ──────────────────────────────────────────
+    # ── LOADING ───────────────────────────────────────────────
 
     def _load_summary(self):
         worker = LoadSummaryWorker()
@@ -704,14 +934,19 @@ class InventoryScreen(QWidget):
         worker.start()
 
     def _on_summary(self, data):
-        self._update_card(self.total_card,     data.get("total_items",     "—"))
-        self._update_card(self.low_card,       data.get("low_stock_count", "—"))
-        self._update_card(self.consumed_card,  data.get("total_consumed",  "—"))
-        self._update_card(self.defective_card, data.get("total_defective", "—"))
+        self._update_card(self.total_card,
+                          data.get("total_items",     "—"))
+        self._update_card(self.low_card,
+                          data.get("low_stock_count", "—"))
+        self._update_card(self.consumed_card,
+                          data.get("total_consumed",  "—"))
+        self._update_card(self.defective_card,
+                          data.get("total_defective", "—"))
 
     def _load_items(self):
         self.status_label.setText("Loading...")
         self.table.setRowCount(0)
+        self.expanded_rows = {}
         worker = LoadInventoryWorker(
             search=self.search_input.text().strip(),
             low_stock=self.low_stock_btn.isChecked()
@@ -724,6 +959,7 @@ class InventoryScreen(QWidget):
         worker.start()
 
     def _refresh(self):
+        self.location_cache = {}
         self._load_summary()
         self._load_items()
 
@@ -738,50 +974,75 @@ class InventoryScreen(QWidget):
 
             def cell(text, align=Qt.AlignmentFlag.AlignLeft):
                 c = QTableWidgetItem(str(text) if text else "—")
-                c.setTextAlignment(
-                    align | Qt.AlignmentFlag.AlignVCenter
-                )
+                c.setTextAlignment(align | Qt.AlignmentFlag.AlignVCenter)
                 if is_low:
-                    c.setBackground(QColor("#fff7ed"))
+                    c.setBackground(QColor("#fee2e2"))
+                    c.setForeground(QColor("#991b1b"))
                 return c
 
-            self.table.setItem(row, 0, cell(item.get("item_name",  "")))
-            self.table.setItem(row, 1, cell(item.get("model_name", "")))
-            self.table.setItem(row, 2, cell(item.get("colour",     "")))
-            self.table.setItem(row, 3, cell(item.get("sku",        "")))
+            # Expand button
+            expand_btn = QPushButton("▶")
+            expand_btn.setFixedSize(30, 30)
+            expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            expand_btn.setStyleSheet("""
+                QPushButton {
+                    background:#f1f5f9; color:#475569;
+                    border:1px solid #e2e8f0;
+                    border-radius:4px; font-size:11px;
+                    font-weight:bold;
+                }
+                QPushButton:hover { background:#e2e8f0; }
+            """)
+            expand_btn.clicked.connect(
+                lambda _, i=item, r=row, b=expand_btn:
+                self._toggle_expand(i, r, b)
+            )
+            expand_widget = QWidget()
+            expand_layout = QHBoxLayout(expand_widget)
+            expand_layout.setContentsMargins(3, 0, 0, 0)
+            expand_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            expand_layout.addWidget(expand_btn)
+            self.table.setCellWidget(row, 0, expand_widget)
+
+            self.table.setItem(row, 1, cell(item.get("item_name",  "")))
+            self.table.setItem(row, 2, cell(item.get("model_name", "")))
+            self.table.setItem(row, 3, cell(item.get("colour",     "")))
+            self.table.setItem(row, 4, cell(item.get("sku",        "")))
 
             rem_cell = QTableWidgetItem(str(remaining))
             rem_cell.setTextAlignment(
-                Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+                Qt.AlignmentFlag.AlignCenter |
+                Qt.AlignmentFlag.AlignVCenter
             )
             if is_low:
-                rem_cell.setForeground(QColor("#dc2626"))
-                rem_cell.setBackground(QColor("#fff7ed"))
-            self.table.setItem(row, 4, rem_cell)
+                rem_cell.setForeground(QColor("#ffffff"))
+                rem_cell.setBackground(QColor("#dc2626"))
+            self.table.setItem(row, 5, rem_cell)
 
-            self.table.setItem(
-                row, 5,
-                cell(item["consumed_quantity"],  Qt.AlignmentFlag.AlignCenter)
-            )
             self.table.setItem(
                 row, 6,
-                cell(item["defective_quantity"], Qt.AlignmentFlag.AlignCenter)
+                cell(item["consumed_quantity"],
+                     Qt.AlignmentFlag.AlignCenter)
+            )
+            self.table.setItem(
+                row, 7,
+                cell(item["defective_quantity"],
+                     Qt.AlignmentFlag.AlignCenter)
             )
 
-            # ── Action buttons ─────────────────────────────────
+            # Action buttons
             btn_widget = QWidget()
             btn_layout = QHBoxLayout(btn_widget)
             btn_layout.setContentsMargins(4, 2, 4, 2)
             btn_layout.setSpacing(4)
 
-            # Update Stock — all roles
-            update_btn = QPushButton("Update Stock")
+            update_btn = QPushButton("Update")
             update_btn.setFixedHeight(30)
             update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             update_btn.setStyleSheet("""
                 QPushButton {
                     background:#16a34a; color:white; border:none;
-                    border-radius:4px; font-size:11px; padding:0 10px;
+                    border-radius:4px; font-size:11px; padding:0 8px;
                 }
                 QPushButton:hover { background:#15803d; }
             """)
@@ -790,15 +1051,29 @@ class InventoryScreen(QWidget):
             )
             btn_layout.addWidget(update_btn)
 
-            # Delete — manager and above only
             if Session.role in ["superadmin", "manager"]:
+                move_btn = QPushButton("Move")
+                move_btn.setFixedHeight(30)
+                move_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                move_btn.setStyleSheet("""
+                    QPushButton {
+                        background:#7c3aed; color:white; border:none;
+                        border-radius:4px; font-size:11px; padding:0 8px;
+                    }
+                    QPushButton:hover { background:#6d28d9; }
+                """)
+                move_btn.clicked.connect(
+                    lambda _, i=item: self._move_stock(i)
+                )
+                btn_layout.addWidget(move_btn)
+
                 delete_btn = QPushButton("Delete")
                 delete_btn.setFixedHeight(30)
                 delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
                 delete_btn.setStyleSheet("""
                     QPushButton {
                         background:#dc2626; color:white; border:none;
-                        border-radius:4px; font-size:11px; padding:0 10px;
+                        border-radius:4px; font-size:11px; padding:0 8px;
                     }
                     QPushButton:hover { background:#b91c1c; }
                 """)
@@ -807,7 +1082,7 @@ class InventoryScreen(QWidget):
                 )
                 btn_layout.addWidget(delete_btn)
 
-            self.table.setCellWidget(row, 7, btn_widget)
+            self.table.setCellWidget(row, 8, btn_widget)
 
         low_count = sum(
             1 for i in items
@@ -818,18 +1093,80 @@ class InventoryScreen(QWidget):
             + (f"  •  ⚠ {low_count} low stock" if low_count else "")
         )
 
+    # ── EXPAND / COLLAPSE ─────────────────────────────────────
+
+    def _toggle_expand(self, item, row, btn):
+        item_id = item["id"]
+
+        if item_id in self.expanded_rows:
+            exp_row = self.expanded_rows.pop(item_id)
+            self.table.removeRow(exp_row)
+            for k in list(self.expanded_rows.keys()):
+                if self.expanded_rows[k] > exp_row:
+                    self.expanded_rows[k] -= 1
+            btn.setText("▶")
+            return
+
+        btn.setText("▼")
+
+        offset  = sum(1 for v in self.expanded_rows.values() if v <= row)
+        exp_row = row + 1 + offset
+
+        self.table.insertRow(exp_row)
+        self.table.setRowHeight(exp_row, 44)
+        self.table.setSpan(exp_row, 1, 1, 8)
+        self.expanded_rows[item_id] = exp_row
+
+        # Loading widget
+        loading_widget = QWidget()
+        loading_widget.setStyleSheet("background:#f8fafc;")
+        loading_layout = QHBoxLayout(loading_widget)
+        loading_layout.setContentsMargins(16, 0, 0, 0)
+        loading_lbl = QLabel("Loading location breakdown...")
+        loading_lbl.setStyleSheet("color:#94a3b8; font-size:12px;")
+        loading_layout.addWidget(loading_lbl)
+        self.table.setCellWidget(exp_row, 1, loading_widget)
+
+        if item_id in self.location_cache:
+            self._show_location_breakdown(
+                item_id, self.location_cache[item_id]
+            )
+        else:
+            worker = LoadLocationStockWorker(item_id)
+            worker.done.connect(self._on_location_loaded)
+            self.workers.append(worker)
+            worker.start()
+
+    def _on_location_loaded(self, item_id: str, stocks: list):
+        self.location_cache[item_id] = stocks
+        self._show_location_breakdown(item_id, stocks)
+
+    def _show_location_breakdown(self, item_id: str, stocks: list):
+        if item_id not in self.expanded_rows:
+            return
+        exp_row = self.expanded_rows[item_id]
+        breakdown = LocationBreakdownWidget(stocks)
+        self.table.setCellWidget(exp_row, 1, breakdown)
+
     # ── ACTIONS ───────────────────────────────────────────────
 
     def _add_stock_entry(self):
         try:
-            model_names = APIClient.get("/inventory/models")
+            models      = APIClient.get("/master/models")
+            model_names = [m["model_name"] for m in models]
         except APIError:
             model_names = []
+
+        try:
+            locations = APIClient.get("/master/locations")
+        except APIError:
+            locations = []
 
         dlg = AddItemDialog(
             self,
             existing_items=self.items,
-            model_names=model_names
+            model_names=model_names,
+            locations=locations
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             data       = dlg.result_data
@@ -837,47 +1174,30 @@ class InventoryScreen(QWidget):
 
             try:
                 if entry_type == "import":
-                    existing = next(
-                        (i for i in self.items if i["sku"] == data["sku"]),
-                        None
+                    APIClient.post("/inventory/items", {
+                        "item_name":           data["part"],
+                        "sku":                 data["sku"],
+                        "unit":                "pcs",
+                        "total_quantity":      data["quantity"],
+                        "low_stock_threshold": 10,
+                        "is_spare_part":       False,
+                        "model_name":          data["model"],
+                        "colour":              data["colour"] or None,
+                        "import_date":         data["date"],
+                        "location_id":         data.get("location_id"),
+                    })
+                    QMessageBox.information(
+                        self, "Stock Added",
+                        f"Stock added successfully.\n"
+                        f"Part     : {data['part']}\n"
+                        f"Model    : {data['model']}\n"
+                        f"Quantity : {data['quantity']} pcs"
                     )
-                    if existing:
-                        APIClient.post("/inventory/adjust", {
-                            "item_id":       existing["id"],
-                            "quantity":      data["quantity"],
-                            "movement_type": "received",
-                            "notes":         f"Import on {data['date']}"
-                        })
-                        QMessageBox.information(
-                            self, "Stock Updated",
-                            f"Added {data['quantity']} pcs to existing item.\n"
-                            f"Part  : {data['part']}\n"
-                            f"Model : {data['model']}"
-                        )
-                    else:
-                        APIClient.post("/inventory/items", {
-                            "item_name":           data["part"],
-                            "sku":                 data["sku"],
-                            "unit":                "pcs",
-                            "total_quantity":      data["quantity"],
-                            "low_stock_threshold": 10,
-                            "is_spare_part":       False,
-                            "model_name":          data["model"],
-                            "colour":              data["colour"] or None,
-                            "import_date":         data["date"],
-                        })
-                        QMessageBox.information(
-                            self, "Item Added",
-                            f"New part added to inventory.\n"
-                            f"Part     : {data['part']}\n"
-                            f"Model    : {data['model']}\n"
-                            f"Quantity : {data['quantity']} pcs"
-                        )
-
-                else:  # defective / damaged
+                else:
                     existing = next(
                         (i for i in self.items
-                         if data["part"].lower() in i["item_name"].lower()
+                         if data["part"].lower() in
+                         i["item_name"].lower()
                          and data["model"].lower() in
                          (i.get("model_name") or "").lower()),
                         None
@@ -899,13 +1219,67 @@ class InventoryScreen(QWidget):
                     })
                     QMessageBox.information(
                         self, "Recorded",
-                        f"{data['quantity']} pcs marked as {data['type']}.\n"
-                        f"Part : {data['part']}"
+                        f"{data['quantity']} pcs marked as "
+                        f"{data['type']}.\nPart : {data['part']}"
                     )
 
+                self.location_cache = {}
                 self._load_items()
                 self._load_summary()
 
+            except APIError as e:
+                QMessageBox.critical(self, "Error", e.message)
+
+    def _move_stock(self, item):
+        try:
+            location_stocks = APIClient.get(
+                f"/inventory/items/{item['id']}/locations"
+            )
+        except APIError as e:
+            QMessageBox.critical(self, "Error", e.message)
+            return
+
+        if not location_stocks:
+            QMessageBox.warning(
+                self, "No Location Data",
+                "This item has no location breakdown yet.\n"
+                "Add it via Import with a location selected first."
+            )
+            return
+
+        try:
+            all_locations = APIClient.get("/master/locations")
+        except APIError:
+            all_locations = []
+
+        dlg = MoveStockDialog(
+            self, item, location_stocks, all_locations
+        )
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            move_data = dlg.get_data()
+            if move_data["from_location_id"] == move_data["to_location_id"]:
+                QMessageBox.warning(
+                    self, "Invalid",
+                    "From and To locations cannot be the same."
+                )
+                return
+            try:
+                result = APIClient.post("/inventory/move", {
+                    "item_id":          item["id"],
+                    "from_location_id": move_data["from_location_id"],
+                    "to_location_id":   move_data["to_location_id"],
+                    "quantity":         move_data["quantity"],
+                    "notes":            move_data["notes"],
+                })
+                QMessageBox.information(
+                    self, "Moved",
+                    f"Successfully moved {move_data['quantity']} pcs.\n"
+                    f"From : {result.get('from', '')}\n"
+                    f"To   : {result.get('to', '')}"
+                )
+                self.location_cache = {}
+                self._load_items()
+                self._load_summary()
             except APIError as e:
                 QMessageBox.critical(self, "Error", e.message)
 
@@ -917,11 +1291,13 @@ class InventoryScreen(QWidget):
                     "item_id":       item["id"],
                     "quantity":      dlg.qty_spin.value(),
                     "movement_type": dlg.type_combo.currentData(),
-                    "notes":         dlg.notes_input.toPlainText().strip() or None,
+                    "notes":         dlg.notes_input.toPlainText().strip()
+                                     or None,
                 })
                 QMessageBox.information(
                     self, "Success", "Stock updated successfully."
                 )
+                self.location_cache = {}
                 self._load_items()
                 self._load_summary()
             except APIError as e:
@@ -929,14 +1305,14 @@ class InventoryScreen(QWidget):
 
     def _delete_item(self, item):
         reply = QMessageBox.question(
-            self,
-            "Confirm Delete",
+            self, "Confirm Delete",
             f"Are you sure you want to delete:\n\n"
             f"Part  : {item['item_name']}\n"
             f"Model : {item.get('model_name', '')}\n\n"
             f"This will deactivate the item.\n"
             f"Stock history is kept.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.Yes |
+            QMessageBox.StandardButton.No
         )
         if reply == QMessageBox.StandardButton.Yes:
             try:
@@ -945,6 +1321,7 @@ class InventoryScreen(QWidget):
                     self, "Deleted",
                     f"'{item['item_name']}' removed from inventory."
                 )
+                self.location_cache = {}
                 self._load_items()
                 self._load_summary()
             except APIError as e:

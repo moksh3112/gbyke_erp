@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.database import Base, engine, test_connection
-from app.routers import auth, inventory
+from app.routers import auth, inventory, models
 import app.models
 
 @asynccontextmanager
@@ -19,6 +19,7 @@ app = FastAPI(
 
 app.include_router(auth.router)
 app.include_router(inventory.router)
+app.include_router(models.router)
 
 @app.get("/")
 def root():
@@ -31,7 +32,7 @@ def health():
 @app.get("/version")
 def get_version():
     return {
-        "version": "1.0.2",
-        "force_update": False,
+        "version":        "1.0.2",
+        "force_update":   False,
         "update_message": ""
     }

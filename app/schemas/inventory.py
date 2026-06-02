@@ -25,9 +25,10 @@ class InventoryItemCreate(BaseModel):
     low_stock_threshold: int             = 10
     unit_cost:           Optional[float] = None
     is_spare_part:       bool            = False
-    model_name:          str                      # mandatory
-    colour:              Optional[str]   = None   # optional
+    model_name:          str
+    colour:              Optional[str]   = None
     import_date:         Optional[str]   = None
+    location_id:         Optional[str]   = None
 
 
 class InventoryItemUpdate(BaseModel):
@@ -39,6 +40,7 @@ class InventoryItemUpdate(BaseModel):
     is_spare_part:       Optional[bool]  = None
     model_name:          Optional[str]   = None
     colour:              Optional[str]   = None
+    location_id:         Optional[str]   = None
 
 
 class InventoryItemResponse(BaseModel):
@@ -60,6 +62,8 @@ class InventoryItemResponse(BaseModel):
     model_name:          Optional[str]   = None
     colour:              Optional[str]   = None
     import_date:         Optional[str]   = None
+    location_id:         Optional[str]   = None
+    location_name:       Optional[str]   = None
 
     class Config:
         from_attributes = True
@@ -85,3 +89,16 @@ class StockMovementResponse(BaseModel):
 
     class Config:
         from_attributes = True
+        
+class StockMoveRequest(BaseModel):
+    item_id:          str
+    from_location_id: str
+    to_location_id:   str
+    quantity:         int
+    notes:            Optional[str] = None
+
+class LocationStockResponse(BaseModel):
+    location_id:   str
+    location_name: str
+    location_type: str
+    quantity:      int

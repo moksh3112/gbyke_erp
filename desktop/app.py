@@ -65,6 +65,9 @@ class MainWindow(QMainWindow):
         if screen == "inventory":
             from desktop.screens.inventory import InventoryScreen
             widget = InventoryScreen()
+        elif screen == "models":
+            from desktop.screens.models import MasterDataScreen
+            widget = MasterDataScreen()
         else:
             widget = QWidget()
             from PyQt6.QtWidgets import QLabel

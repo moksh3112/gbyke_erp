@@ -159,9 +159,10 @@ class InventoryItem(Base):
     low_stock_threshold = Column(Integer, default=10)
     unit_cost           = Column(Float, default=0.0)
     is_spare_part       = Column(Boolean, default=False)
-    model_name  = Column(String(100), nullable=True)
-    colour      = Column(String(50),  nullable=True)
-    import_date = Column(Date, nullable=True)
+    model_name          = Column(String(100), nullable=True)
+    colour              = Column(String(50),  nullable=True)
+    import_date         = Column(Date, nullable=True)
+    location_id         = Column(String, ForeignKey("locations.id"), nullable=True)
     is_active           = Column(Boolean, default=True)
     created_at          = Column(DateTime(timezone=True), server_default=func.now())
     updated_at          = Column(DateTime(timezone=True), onupdate=func.now())
@@ -169,6 +170,7 @@ class InventoryItem(Base):
     category        = relationship("InventoryCategory", back_populates="items")
     stock_movements = relationship("StockMovement", back_populates="item")
     bom_items       = relationship("BOMItem", back_populates="inventory_item")
+    location        = relationship("Location", foreign_keys=[location_id])
 
 
 class StockMovement(Base):
@@ -393,3 +395,16 @@ class AuditLog(Base):
     new_value  = Column(Text)
     ip_address = Column(String(50))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+class InventoryLocationStock(Base):
+    __tablename__ = "inventory_location_stock"
+
+    id          = Column(String, primary_key=True, default=gen_uuid)
+    item_id     = Column(String, ForeignKey("inventory_items.id"), nullable=False)
+    location_id = Column(String, ForeignKey("locations.id"),       nullable=False)
+    quantity    = Column(Integer, default=0)
+    created_at  = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at  = Column(DateTime(timezone=True), onupdate=func.now())
+
+    item     = relationship("InventoryItem", foreign_keys=[item_id])
+    location = relationship("Location",      foreign_keys=[location_id])
