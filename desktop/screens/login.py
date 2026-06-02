@@ -6,6 +6,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 from desktop.utils.api_client import APIClient, APIError
 from desktop.utils.session import Session
+from desktop.utils.updater import check_for_updates
 
 
 class LoginWorker(QThread):
@@ -220,11 +221,33 @@ class LoginScreen(QWidget):
             self.server_label.setStyleSheet(
                 "color: #16a34a; font-size: 11px; border: none;"
             )
+            # Check for updates silently
+            self._check_updates()
         else:
             self.server_label.setText("● Server unreachable — contact IT")
             self.server_label.setStyleSheet(
                 "color: #dc2626; font-size: 11px; border: none;"
             )
+
+    def _check_updates(self):
+        update = check_for_updates()
+        if update["update_available"]:
+            if update["force_update"]:
+                from PyQt6.QtWidgets import QMessageBox
+                QMessageBox.warning(
+                    self,
+                    "Update Required",
+                    f"A required update is available (v{update['server_version']}).\n\n"
+                    f"Please ask IT to run the update script on this laptop.\n\n"
+                    f"{update['message']}"
+            )
+            else:
+                self.server_label.setText(
+                   f"● Server connected  •  Update available v{update['server_version']}"
+                )
+                self.server_label.setStyleSheet(
+                    "color: #f59e0b; font-size: 11px; border: none;"
+                )
 
     def _toggle_password(self, checked: bool):
         if checked:

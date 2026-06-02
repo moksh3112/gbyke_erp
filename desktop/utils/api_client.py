@@ -116,3 +116,10 @@ class APIClient:
             return True
         except APIError:
             return False
+
+    @classmethod
+    def get_server_version(cls) -> dict:
+        try:
+            return cls.get("/version")
+        except APIError:
+            return None
