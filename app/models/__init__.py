@@ -34,14 +34,15 @@ class PDIResult(str, enum.Enum):
     rework  = "rework"
 
 class StockMovementType(str, enum.Enum):
-    received    = "received"
-    consumed    = "consumed"
-    defective   = "defective"
-    damaged     = "damaged"
-    scrapped    = "scrapped"
-    transferred = "transferred"
-    adjusted    = "adjusted"
-    returned    = "returned"
+    received          = "received"
+    consumed          = "consumed"
+    defective         = "defective"
+    damaged           = "damaged"
+    scrapped          = "scrapped"
+    transferred       = "transferred"
+    adjusted          = "adjusted"
+    returned          = "returned"
+    correction_remove = "correction_remove"   # ← Bug 2 fix: quantity correction removal
 
 class TransferStatus(str, enum.Enum):
     pending    = "pending"
@@ -181,8 +182,8 @@ class StockMovement(Base):
     movement_type  = Column(Enum(StockMovementType), nullable=False)
     quantity       = Column(Integer, nullable=False)
     location_id    = Column(String, ForeignKey("locations.id"))
-    reference_id   = Column(String)        # shipment_id / assembly_id / transfer_id
-    reference_type = Column(String(50))    # shipment / assembly / transfer
+    reference_id   = Column(String)
+    reference_type = Column(String(50))
     notes          = Column(Text)
     performed_by   = Column(String, ForeignKey("users.id"))
     created_at     = Column(DateTime(timezone=True), server_default=func.now())
@@ -342,7 +343,7 @@ class StockTransfer(Base):
     id               = Column(String, primary_key=True, default=gen_uuid)
     from_location_id = Column(String, ForeignKey("locations.id"), nullable=False)
     to_location_id   = Column(String, ForeignKey("locations.id"), nullable=False)
-    transfer_type    = Column(String(30))   # inventory / scooter_unit
+    transfer_type    = Column(String(30))
     status           = Column(Enum(TransferStatus), default=TransferStatus.pending)
     notes            = Column(Text)
     initiated_by     = Column(String, ForeignKey("users.id"))
@@ -395,7 +396,8 @@ class AuditLog(Base):
     new_value  = Column(Text)
     ip_address = Column(String(50))
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
+
+
 class InventoryLocationStock(Base):
     __tablename__ = "inventory_location_stock"
 

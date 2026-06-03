@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QAbstractItemView, QCompleter,
     QStackedWidget, QDateEdit, QMenu
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QStringListModel, QDate, QPoint
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QStringListModel, QDate, QPoint, QTimer
 from PyQt6.QtGui import QFont, QColor, QAction
 from desktop.utils.api_client import APIClient, APIError
 from desktop.utils.session import Session
@@ -117,7 +117,6 @@ class SearchableInput(QWidget):
 # ── HELPER: model combo setup ─────────────────────────────────
 
 def _setup_model_combo(combo: QComboBox, model_names: list):
-    """Simple non-editable dropdown."""
     inp = ("border:1px solid #ddd; border-radius:4px;"
            "padding:0 8px; color:#1a1a1a; background:white;")
     combo.setStyleSheet(inp)
@@ -153,7 +152,6 @@ class ImportForm(QWidget):
         spin = ("color:#1a1a1a; background:white; border:1px solid #ddd;"
                 "border-radius:4px; padding:0 8px;")
 
-        # Date
         self.date_input = QDateEdit()
         self.date_input.setDate(QDate.currentDate())
         self.date_input.setCalendarPopup(True)
@@ -162,7 +160,6 @@ class ImportForm(QWidget):
         d = QLabel("Date *"); d.setStyleSheet(lbl)
         layout.addRow(d, self.date_input)
 
-        # Model — simple dropdown
         self.model_combo = QComboBox()
         self.model_combo.setFixedHeight(36)
         _setup_model_combo(self.model_combo, self._model_names)
@@ -170,14 +167,12 @@ class ImportForm(QWidget):
         m = QLabel("Scooter Model *"); m.setStyleSheet(lbl)
         layout.addRow(m, self.model_combo)
 
-        # Part
         self.part_input = SearchableInput("Type or select part name...")
         self.part_input.set_items(self._part_names)
         self.part_input.input.textChanged.connect(self._update_sku)
         p = QLabel("Part Name *"); p.setStyleSheet(lbl)
         layout.addRow(p, self.part_input)
 
-        # Colour
         self.colour_input = QLineEdit()
         self.colour_input.setPlaceholderText(
             "e.g. Red, Blue  —  leave blank if no colour"
@@ -188,7 +183,6 @@ class ImportForm(QWidget):
         c = QLabel("Colour"); c.setStyleSheet(lbl)
         layout.addRow(c, self.colour_input)
 
-        # Location
         self.location_combo = QComboBox()
         self.location_combo.setFixedHeight(36)
         self.location_combo.setStyleSheet(inp)
@@ -202,7 +196,6 @@ class ImportForm(QWidget):
         l = QLabel("Location"); l.setStyleSheet(lbl)
         layout.addRow(l, self.location_combo)
 
-        # Quantity
         self.qty_spin = QSpinBox()
         self.qty_spin.setFixedHeight(36)
         self.qty_spin.setMinimum(1)
@@ -212,7 +205,6 @@ class ImportForm(QWidget):
         q = QLabel("Quantity *"); q.setStyleSheet(lbl)
         layout.addRow(q, self.qty_spin)
 
-        # SKU preview
         self.sku_label = QLabel("Auto SKU: —")
         self.sku_label.setStyleSheet(
             "color:#6b7280; font-size:11px; font-style:italic;"
@@ -276,14 +268,12 @@ class DefectiveForm(QWidget):
         spin = ("color:#1a1a1a; background:white; border:1px solid #ddd;"
                 "border-radius:4px; padding:0 8px;")
 
-        # Model — simple dropdown
         self.model_combo = QComboBox()
         self.model_combo.setFixedHeight(36)
         _setup_model_combo(self.model_combo, self._model_names)
         m = QLabel("Scooter Model *"); m.setStyleSheet(lbl)
         layout.addRow(m, self.model_combo)
 
-        # Part
         self.part_input = SearchableInput("Type or select part name...")
         self.part_input.set_items(self._part_names)
         p = QLabel("Part Name *"); p.setStyleSheet(lbl)
@@ -300,7 +290,6 @@ class DefectiveForm(QWidget):
         layout.addRow(c, self.colour_input)
         # ──────────────────────────────────────────────────────
 
-        # Quantity
         self.qty_spin = QSpinBox()
         self.qty_spin.setFixedHeight(36)
         self.qty_spin.setMinimum(1)
@@ -310,7 +299,6 @@ class DefectiveForm(QWidget):
         q = QLabel("Quantity *"); q.setStyleSheet(lbl)
         layout.addRow(q, self.qty_spin)
 
-        # Type
         self.type_combo = QComboBox()
         self.type_combo.setFixedHeight(36)
         self.type_combo.setStyleSheet(inp)
@@ -319,7 +307,6 @@ class DefectiveForm(QWidget):
         t = QLabel("Type *"); t.setStyleSheet(lbl)
         layout.addRow(t, self.type_combo)
 
-        # Damage stage
         self.stage_combo = QComboBox()
         self.stage_combo.setFixedHeight(36)
         self.stage_combo.setStyleSheet(inp)
@@ -329,7 +316,6 @@ class DefectiveForm(QWidget):
         sl = QLabel("Damage Stage *"); sl.setStyleSheet(lbl)
         layout.addRow(sl, self.stage_combo)
 
-        # Notes
         self.notes_input = QTextEdit()
         self.notes_input.setFixedHeight(50)
         self.notes_input.setPlaceholderText("Optional: any additional details...")
@@ -735,8 +721,8 @@ class EditDetailsDialog(QDialog):
         self.result_data = {
             "item_name":           name,
             "model_name":          model,
-            # Bug 4 fix: send the raw string (even if empty) — never send None.
-            # Empty string signals "clear the colour"; backend sentinel handles the rest.
+            # Bug 4 fix: send raw string (empty string = clear colour).
+            # Backend sentinel "__COLOUR_UNSET__" handles skip vs clear.
             "colour":              self.colour_input.text().strip(),
             "low_stock_threshold": self.threshold_spin.value(),
         }
@@ -1068,11 +1054,11 @@ class ItemHistoryWidget(QWidget):
         history_row.setSpacing(12)
         history_row.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        purchases   = movements.get("imports",      [])
-        defectives  = movements.get("defectives",   [])
-        consumed    = movements.get("consumed",     [])
-        transfers   = movements.get("transfers",    [])
-        corrections = movements.get("corrections",  [])
+        purchases   = movements.get("imports",     [])
+        defectives  = movements.get("defectives",  [])
+        consumed    = movements.get("consumed",    [])
+        transfers   = movements.get("transfers",   [])
+        corrections = movements.get("corrections", [])
 
         if purchases:
             history_row.addWidget(self._section(
@@ -1546,15 +1532,21 @@ class InventoryScreen(QWidget):
         pos = btn.mapToGlobal(QPoint(0, btn.height()))
         menu.exec(pos)
 
-        # ── Bug 3 fix: restore all expanded row heights after menu closes.
-        # QMenu.exec() is blocking; when it returns Qt can collapse expanded
-        # rows during the focus-change repaint. Re-applying the heights fixes it.
+        # ── Bug 3 fix: QMenu.exec() is blocking. When it returns, Qt's
+        # focus-change repaint can collapse expanded row heights to 0.
+        # QTimer.singleShot(0,...) defers the restore until after Qt
+        # finishes processing all pending events from the menu close.
+        QTimer.singleShot(0, self._restore_expanded_rows)
+
+    def _restore_expanded_rows(self):
+        """Re-apply correct heights to all expanded rows after menu close."""
         for _item_id, exp_row in self.expanded_rows.items():
-            widget = self.table.cellWidget(exp_row, 1)
-            if widget:
-                self.table.setRowHeight(
-                    exp_row, max(widget.sizeHint().height(), 220)
-                )
+            if exp_row < self.table.rowCount():
+                widget = self.table.cellWidget(exp_row, 1)
+                if widget:
+                    self.table.setRowHeight(
+                        exp_row, max(widget.sizeHint().height(), 220)
+                    )
 
     # ── EXPAND / COLLAPSE ─────────────────────────────────────
 
@@ -1712,8 +1704,8 @@ class InventoryScreen(QWidget):
                     )
                     return
 
-            # Bug 2 fix: use "correction_remove" instead of "consumed" so
-            # the Consumed column is not affected when reducing stock.
+            # Bug 2 fix: use "correction_remove" instead of "consumed"
+            # so the Consumed column is NOT incremented on quantity removal.
             movement_type = "adjusted" if direction == "add" else "correction_remove"
             note = f"⚙️ Quantity Correction  |  {reason}"
 
