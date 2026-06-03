@@ -57,7 +57,7 @@ class AdminDashboard(QWidget):
         layout.setSpacing(20)
         layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        header = QLabel(f"Welcome back, {Session.full_name} 👋")
+        header = QLabel(f"Welcome back, {Session.username} 👋")
         header.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         header.setStyleSheet("color:#1e293b;")
         layout.addWidget(header)

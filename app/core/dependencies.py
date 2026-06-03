@@ -69,3 +69,13 @@ def can_see_financials(user: User) -> bool:
 
 def can_manage_accounts(user: User) -> bool:
     return user.role == "superadmin"
+
+def require_superadmin(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    if current_user.role != "superadmin":
+        raise HTTPException(
+            status_code=403,
+            detail="Only superadmin can access this."
+        )
+    return current_user

@@ -16,7 +16,6 @@ class MainWindow(QMainWindow):
         super().__init__()
         from version import VERSION
         self.setWindowTitle(f"G-Byke ERP — v{VERSION}")
-        self.setMinimumSize(1100, 680)
         self.setFont(QFont("Segoe UI", 10))
         self._show_login()
 
@@ -26,17 +25,53 @@ class MainWindow(QMainWindow):
         self.login_screen = LoginScreen()
         self.login_screen.login_successful.connect(self._on_login)
         self.setCentralWidget(self.login_screen)
-        self.resize(420, 520)
 
+        self.setWindowFlags(
+            Qt.WindowType.Window |
+            Qt.WindowType.WindowMinimizeButtonHint |
+            Qt.WindowType.WindowCloseButtonHint
+            # No maximize button on login
+        )
+        self.setMinimumSize(0, 0)
+        self.setMaximumSize(420, 580)
+        self.resize(420, 580)
+        self.show()
+
+        try:
+            screen_geo = self.screen().availableGeometry()
+            x = (screen_geo.width()  - 420) // 2
+            y = (screen_geo.height() - 580) // 2
+            self.move(x, y)
+        except Exception:
+            pass
     def _on_login(self, role: str):
-        self.resize(1200, 750)
-        self._show_main_app()
+        # Re-enable maximize without calling show() twice
+        self.setWindowFlags(
+            Qt.WindowType.Window |
+            Qt.WindowType.WindowMinimizeButtonHint |
+            Qt.WindowType.WindowMaximizeButtonHint |
+            Qt.WindowType.WindowCloseButtonHint
+        )
+        self.setMinimumSize(1100, 680)
+        self.setMaximumSize(16777215, 16777215)
+        self.resize(1280, 800)
 
+        # Center on screen
+        try:
+            screen_geo = self.screen().availableGeometry()
+            x = (screen_geo.width()  - 1280) // 2
+            y = (screen_geo.height() - 800)  // 2
+            self.move(x, y)
+        except Exception:
+            pass
+
+        self._show_main_app()
+        self.show()  # single show() call AFTER setting up main app
     # ── MAIN APP ───────────────────────────────────────────────
 
     def _show_main_app(self):
         container = QWidget()
-        layout = QHBoxLayout(container)
+        layout    = QHBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
@@ -47,10 +82,10 @@ class MainWindow(QMainWindow):
 
         # Content area
         self.content = QStackedWidget()
-        self.content.setStyleSheet("background-color: #f8fafc;")
+        self.content.setStyleSheet("background-color:#f8fafc;")
 
         # Default dashboard
-        if Session.is_admin():
+        if Session.role in ["superadmin", "manager"]:
             self.content.addWidget(AdminDashboard())
         else:
             self.content.addWidget(UserDashboard())
@@ -61,13 +96,15 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(container)
 
     def _on_nav(self, screen: str):
-    # Import screens
         if screen == "inventory":
             from desktop.screens.inventory import InventoryScreen
             widget = InventoryScreen()
         elif screen == "models":
             from desktop.screens.models import MasterDataScreen
             widget = MasterDataScreen()
+        elif screen == "users":
+            from desktop.screens.users import UsersScreen
+            widget = UsersScreen()
         else:
             widget = QWidget()
             from PyQt6.QtWidgets import QLabel
@@ -79,7 +116,7 @@ class MainWindow(QMainWindow):
 
         self.content.addWidget(widget)
         self.content.setCurrentWidget(widget)
-        
+
     def _on_logout(self):
         reply = QMessageBox.question(
             self, "Logout",
@@ -88,5 +125,9 @@ class MainWindow(QMainWindow):
         )
         if reply == QMessageBox.StandardButton.Yes:
             Session.clear()
+            # Reset window flags for login
+            self.setWindowFlag(
+                Qt.WindowType.WindowMaximizeButtonHint, False
+            )
+            self.setMinimumSize(0, 0)
             self._show_login()
-            self.resize(420, 520)
