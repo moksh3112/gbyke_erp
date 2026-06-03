@@ -322,9 +322,8 @@ def update_item(
     db.refresh(item)
     return _item_to_response(item, current_user)
 
-
 @router.delete("/items/{item_id}")
-def deactivate_item(
+def delete_item(
     item_id:      str,
     db:           Session = Depends(get_db),
     current_user: User    = Depends(require_manager_or_above)
@@ -334,12 +333,21 @@ def deactivate_item(
     ).first()
     if not item:
         raise HTTPException(404, "Item not found.")
-    item.is_active = False
+
+    # Delete all related records first
+    db.query(StockMovement).filter(
+        StockMovement.item_id == item_id
+    ).delete()
+
+    db.query(InventoryLocationStock).filter(
+        InventoryLocationStock.item_id == item_id
+    ).delete()
+
+    # Hard delete the item itself
+    db.delete(item)
     db.commit()
-    return {"message": f"'{item.item_name}' deactivated."}
 
-
-# ── STOCK ADJUST ──────────────────────────────────────────────
+    return {"message": f"'{item.item_name}' permanently deleted."}
 
 @router.post("/adjust")
 def adjust_stock(
@@ -365,10 +373,25 @@ def adjust_stock(
                 400,
                 f"Not enough stock. Available: {item.remaining_quantity} pcs"
             )
+        # Check location stock if location provided
+        if data.location_id:
+            loc_stock = db.query(InventoryLocationStock).filter(
+                InventoryLocationStock.item_id     == data.item_id,
+                InventoryLocationStock.location_id == data.location_id
+            ).first()
+            if not loc_stock or loc_stock.quantity < data.quantity:
+                available = loc_stock.quantity if loc_stock else 0
+                raise HTTPException(
+                    400,
+                    f"Not enough stock at this location. "
+                    f"Available: {available} pcs"
+                )
+
     if data.movement_type in ["adjusted", "received"]:
         if current_user.role == "staff":
             raise HTTPException(403, "Staff cannot adjust stock manually.")
 
+    # Update item totals
     if data.movement_type == "consumed":
         item.consumed_quantity  += data.quantity
         item.remaining_quantity -= data.quantity
@@ -381,6 +404,26 @@ def adjust_stock(
     elif data.movement_type in ["adjusted", "received"]:
         item.remaining_quantity += data.quantity
         item.total_quantity     += data.quantity
+
+    # Update location stock
+    if data.location_id:
+        loc_stock = db.query(InventoryLocationStock).filter(
+            InventoryLocationStock.item_id     == data.item_id,
+            InventoryLocationStock.location_id == data.location_id
+        ).first()
+        if data.movement_type in ["consumed", "defective", "damaged"]:
+            if loc_stock:
+                loc_stock.quantity -= data.quantity
+        elif data.movement_type in ["adjusted", "received"]:
+            if loc_stock:
+                loc_stock.quantity += data.quantity
+            else:
+                loc_stock = InventoryLocationStock(
+                    item_id     = data.item_id,
+                    location_id = data.location_id,
+                    quantity    = data.quantity
+                )
+                db.add(loc_stock)
 
     movement = StockMovement(
         item_id       = item.id,
@@ -396,7 +439,6 @@ def adjust_stock(
         "message": "Stock updated successfully.",
         "item":    _item_to_response(item, current_user)
     }
-
 
 # ── STOCK MOVE ────────────────────────────────────────────────
 
@@ -477,32 +519,67 @@ def move_stock(
 
 
 # ── MOVEMENTS ─────────────────────────────────────────────────
-
 @router.get("/movements/{item_id}")
 def get_movements(
     item_id:      str,
     db:           Session = Depends(get_db),
     current_user: User    = Depends(require_any_role)
 ):
+    """Returns full history of a part — purchases, defectives, consumed, moves, corrections."""
     movements = db.query(StockMovement).filter(
         StockMovement.item_id == item_id
-    ).order_by(StockMovement.created_at.desc()).limit(50).all()
+    ).order_by(StockMovement.created_at.desc()).limit(200).all()
 
-    result = []
+    imports     = []
+    defectives  = []
+    consumed    = []
+    transfers   = []
+    corrections = []
+
     for m in movements:
         performer = db.query(User).filter(
             User.id == m.performed_by
         ).first()
-        result.append({
-            "id":                m.id,
-            "movement_type":     m.movement_type,
-            "quantity":          m.quantity,
-            "notes":             m.notes,
-            "performed_by_name": performer.full_name if performer else "Unknown",
-            "created_at":        m.created_at.isoformat() if m.created_at else None
-        })
-    return result
+        performer_name = performer.full_name if performer else "Unknown"
 
+        created = (
+            m.created_at.strftime("%d-%b-%Y  %H:%M")
+            if m.created_at else "—"
+        )
+
+        entry = {
+            "id":           m.id,
+            "quantity":     m.quantity,
+            "notes":        m.notes or "",
+            "performed_by": performer_name,
+            "created_at":   created,
+            "type":         m.movement_type,
+        }
+
+        is_correction = "Quantity Correction" in (m.notes or "")
+
+        if m.movement_type in ["received", "adjusted"]:
+            if is_correction:
+                corrections.append(entry)
+            else:
+                imports.append(entry)
+        elif m.movement_type in ["defective", "damaged"]:
+            defectives.append(entry)
+        elif m.movement_type == "consumed":
+            if is_correction:
+                corrections.append(entry)
+            else:
+                consumed.append(entry)
+        elif m.movement_type == "transferred":
+            transfers.append(entry)
+
+    return {
+        "imports":     imports,
+        "defectives":  defectives,
+        "consumed":    consumed,
+        "transfers":   transfers,
+        "corrections": corrections,
+    }
 
 # ── MODELS LIST ───────────────────────────────────────────────
 

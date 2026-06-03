@@ -74,6 +74,7 @@ class StockAdjustRequest(BaseModel):
     quantity:      int
     movement_type: str
     notes:         Optional[str] = None
+    location_id:   Optional[str] = None  # ← add this
 
 
 class StockMovementResponse(BaseModel):
