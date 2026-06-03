@@ -289,6 +289,17 @@ class DefectiveForm(QWidget):
         p = QLabel("Part Name *"); p.setStyleSheet(lbl)
         layout.addRow(p, self.part_input)
 
+        # ── Bug 1 fix: Colour field added (optional) ──────────
+        self.colour_input = QLineEdit()
+        self.colour_input.setPlaceholderText(
+            "e.g. Red, Blue  —  leave blank if not applicable"
+        )
+        self.colour_input.setFixedHeight(36)
+        self.colour_input.setStyleSheet(inp)
+        c = QLabel("Colour"); c.setStyleSheet(lbl)
+        layout.addRow(c, self.colour_input)
+        # ──────────────────────────────────────────────────────
+
         # Quantity
         self.qty_spin = QSpinBox()
         self.qty_spin.setFixedHeight(36)
@@ -337,6 +348,7 @@ class DefectiveForm(QWidget):
         return {
             "model":        self.model_combo.currentData() or "",
             "part":         self.part_input.text(),
+            "colour":       self.colour_input.text().strip(),  # Bug 1 fix
             "quantity":     self.qty_spin.value(),
             "type":         self.type_combo.currentData(),
             "damage_stage": self.stage_combo.currentData(),
@@ -502,7 +514,6 @@ class UpdateStockDialog(QDialog):
         inp = ("border:1px solid #ddd; border-radius:4px;"
                "padding:0 8px; color:#1a1a1a; background:white;")
 
-        # Action type
         self.type_combo = QComboBox()
         self.type_combo.setFixedHeight(36)
         self.type_combo.setStyleSheet(inp)
@@ -517,7 +528,6 @@ class UpdateStockDialog(QDialog):
         al = QLabel("Action"); al.setStyleSheet(lbl)
         form.addRow(al, self.type_combo)
 
-        # Quantity
         self.qty_spin = QSpinBox()
         self.qty_spin.setFixedHeight(36)
         self.qty_spin.setMinimum(1)
@@ -529,7 +539,6 @@ class UpdateStockDialog(QDialog):
         ql = QLabel("Quantity"); ql.setStyleSheet(lbl)
         form.addRow(ql, self.qty_spin)
 
-        # Location
         self.location_combo = QComboBox()
         self.location_combo.setFixedHeight(36)
         self.location_combo.setStyleSheet(inp)
@@ -545,7 +554,6 @@ class UpdateStockDialog(QDialog):
         self.location_lbl.setStyleSheet(lbl)
         form.addRow(self.location_lbl, self.location_combo)
 
-        # Damage stage
         self.stage_combo = QComboBox()
         self.stage_combo.setFixedHeight(36)
         self.stage_combo.setStyleSheet(inp)
@@ -557,7 +565,6 @@ class UpdateStockDialog(QDialog):
         self.stage_lbl.setStyleSheet(lbl)
         form.addRow(self.stage_lbl, self.stage_combo)
 
-        # Notes
         self.notes_input = QTextEdit()
         self.notes_input.setFixedHeight(60)
         self.notes_input.setPlaceholderText("Optional notes...")
@@ -601,11 +608,12 @@ class UpdateStockDialog(QDialog):
         self.stage_combo.setVisible(is_damage)
         self.stage_lbl.setVisible(is_damage)
 
-        # Update location label based on action
         if is_add:
             self.location_lbl.setText("To Location")
         else:
             self.location_lbl.setText("From Location")
+
+
 # ── EDIT DETAILS DIALOG ───────────────────────────────────────
 
 class EditDetailsDialog(QDialog):
@@ -646,7 +654,6 @@ class EditDetailsDialog(QDialog):
         inp = ("border:1px solid #ddd; border-radius:4px;"
                "padding:0 8px; color:#1a1a1a; background:white;")
 
-        # Part name
         self.name_input = QLineEdit()
         self.name_input.setFixedHeight(36)
         self.name_input.setStyleSheet(inp)
@@ -654,14 +661,12 @@ class EditDetailsDialog(QDialog):
         nl = QLabel("Part Name *"); nl.setStyleSheet(lbl)
         form.addRow(nl, self.name_input)
 
-        # Model — simple dropdown
         self.model_combo = QComboBox()
         self.model_combo.setFixedHeight(36)
         self.model_combo.setStyleSheet(inp)
         self.model_combo.addItem("-- Select Model --", "")
         for name in self.model_names:
             self.model_combo.addItem(name, name)
-        # Pre-select current model
         current_model = self.item.get("model_name", "")
         for i in range(self.model_combo.count()):
             if self.model_combo.itemData(i) == current_model:
@@ -670,16 +675,14 @@ class EditDetailsDialog(QDialog):
         ml = QLabel("Scooter Model *"); ml.setStyleSheet(lbl)
         form.addRow(ml, self.model_combo)
 
-        # Colour
         self.colour_input = QLineEdit()
         self.colour_input.setFixedHeight(36)
         self.colour_input.setStyleSheet(inp)
         self.colour_input.setText(self.item.get("colour") or "")
-        self.colour_input.setPlaceholderText("Leave blank if no colour")
+        self.colour_input.setPlaceholderText("Leave blank to remove colour")
         cl = QLabel("Colour"); cl.setStyleSheet(lbl)
         form.addRow(cl, self.colour_input)
 
-        # Low stock threshold
         self.threshold_spin = QSpinBox()
         self.threshold_spin.setFixedHeight(36)
         self.threshold_spin.setMinimum(1)
@@ -732,13 +735,16 @@ class EditDetailsDialog(QDialog):
         self.result_data = {
             "item_name":           name,
             "model_name":          model,
-            "colour":              self.colour_input.text().strip() or None,
+            # Bug 4 fix: send the raw string (even if empty) — never send None.
+            # Empty string signals "clear the colour"; backend sentinel handles the rest.
+            "colour":              self.colour_input.text().strip(),
             "low_stock_threshold": self.threshold_spin.value(),
         }
         self.accept()
 
 
 # ── CORRECT QUANTITY DIALOG ───────────────────────────────────
+
 class CorrectQuantityDialog(QDialog):
     def __init__(self, parent, item, locations=None):
         super().__init__(parent)
@@ -778,7 +784,6 @@ class CorrectQuantityDialog(QDialog):
         inp = ("border:1px solid #ddd; border-radius:4px;"
                "padding:0 8px; color:#1a1a1a; background:white;")
 
-        # Correction type
         self.direction_combo = QComboBox()
         self.direction_combo.setFixedHeight(36)
         self.direction_combo.setStyleSheet(inp)
@@ -794,7 +799,6 @@ class CorrectQuantityDialog(QDialog):
         dl = QLabel("Correction Type *"); dl.setStyleSheet(lbl)
         form.addRow(dl, self.direction_combo)
 
-        # Quantity
         self.qty_spin = QSpinBox()
         self.qty_spin.setFixedHeight(36)
         self.qty_spin.setMinimum(1)
@@ -806,7 +810,6 @@ class CorrectQuantityDialog(QDialog):
         ql = QLabel("Correction Amount *"); ql.setStyleSheet(lbl)
         form.addRow(ql, self.qty_spin)
 
-        # Location
         self.location_combo = QComboBox()
         self.location_combo.setFixedHeight(36)
         self.location_combo.setStyleSheet(inp)
@@ -822,7 +825,6 @@ class CorrectQuantityDialog(QDialog):
         self.location_lbl.setStyleSheet(lbl)
         form.addRow(self.location_lbl, self.location_combo)
 
-        # Reason
         self.reason_input = QTextEdit()
         self.reason_input.setFixedHeight(60)
         self.reason_input.setPlaceholderText(
@@ -881,6 +883,7 @@ class CorrectQuantityDialog(QDialog):
             "reason":      self.reason_input.toPlainText().strip(),
             "location_id": self.location_combo.currentData() or None,
         }
+
 
 # ── MOVE STOCK DIALOG ─────────────────────────────────────────
 
@@ -1028,7 +1031,6 @@ class ItemHistoryWidget(QWidget):
         layout.setContentsMargins(32, 8, 16, 8)
         layout.setSpacing(8)
 
-        # Locations
         if location_stocks:
             loc_row = QHBoxLayout()
             loc_row.setSpacing(6)
@@ -1062,16 +1064,15 @@ class ItemHistoryWidget(QWidget):
             div.setStyleSheet("color:#e5e7eb;")
             layout.addWidget(div)
 
-        # History sections
         history_row = QHBoxLayout()
         history_row.setSpacing(12)
         history_row.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        purchases  = movements.get("imports",    [])
-        defectives = movements.get("defectives", [])
-        consumed   = movements.get("consumed",   [])
-        transfers  = movements.get("transfers",  [])
-        corrections = movements.get("corrections", [])
+        purchases   = movements.get("imports",      [])
+        defectives  = movements.get("defectives",   [])
+        consumed    = movements.get("consumed",     [])
+        transfers   = movements.get("transfers",    [])
+        corrections = movements.get("corrections",  [])
 
         if purchases:
             history_row.addWidget(self._section(
@@ -1112,6 +1113,7 @@ class ItemHistoryWidget(QWidget):
                     + (f"\n   {e['notes'][:50]}" if e['notes'] else "")
                 )
             ))
+
         if corrections:
             history_row.addWidget(self._section(
                 "⚙️ Quantity Corrections", corrections, "#f59e0b", "#fffbeb",
@@ -1185,7 +1187,6 @@ class InventoryScreen(QWidget):
         layout.setContentsMargins(24, 24, 24, 24)
         layout.setSpacing(16)
 
-        # Header
         header_row = QHBoxLayout()
         title = QLabel("📦 Inventory")
         title.setFont(QFont("Arial", 18, QFont.Weight.Bold))
@@ -1209,7 +1210,6 @@ class InventoryScreen(QWidget):
 
         layout.addLayout(header_row)
 
-        # Summary cards
         summary_row = QHBoxLayout()
         summary_row.setSpacing(10)
         self.total_card     = self._stat_card("Total Items",       "—", "#2563eb")
@@ -1221,7 +1221,6 @@ class InventoryScreen(QWidget):
             summary_row.addWidget(c)
         layout.addLayout(summary_row)
 
-        # Filters
         filter_row = QHBoxLayout()
         filter_row.setSpacing(8)
 
@@ -1265,7 +1264,6 @@ class InventoryScreen(QWidget):
         filter_row.addWidget(refresh_btn)
         layout.addLayout(filter_row)
 
-        # Table
         self.table = QTableWidget()
         self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
@@ -1403,7 +1401,6 @@ class InventoryScreen(QWidget):
                     c.setForeground(QColor("#991b1b"))
                 return c
 
-            # Expand button
             expand_btn = QPushButton("▶")
             expand_btn.setFixedSize(28, 28)
             expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1456,7 +1453,6 @@ class InventoryScreen(QWidget):
                 combined_cell.setForeground(QColor("#dc2626"))
             self.table.setItem(row, 7, combined_cell)
 
-            # Actions button
             actions_btn = QPushButton("⚡ Actions ▾")
             actions_btn.setFixedHeight(30)
             actions_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1550,6 +1546,16 @@ class InventoryScreen(QWidget):
         pos = btn.mapToGlobal(QPoint(0, btn.height()))
         menu.exec(pos)
 
+        # ── Bug 3 fix: restore all expanded row heights after menu closes.
+        # QMenu.exec() is blocking; when it returns Qt can collapse expanded
+        # rows during the focus-change repaint. Re-applying the heights fixes it.
+        for _item_id, exp_row in self.expanded_rows.items():
+            widget = self.table.cellWidget(exp_row, 1)
+            if widget:
+                self.table.setRowHeight(
+                    exp_row, max(widget.sizeHint().height(), 220)
+                )
+
     # ── EXPAND / COLLAPSE ─────────────────────────────────────
 
     def _toggle_expand(self, item, row, btn):
@@ -1615,7 +1621,6 @@ class InventoryScreen(QWidget):
     # ── ACTION HANDLERS ───────────────────────────────────────
 
     def _update_stock(self, item):
-        # Load location stocks so dialog can show them
         try:
             location_stocks = APIClient.get(
                 f"/inventory/items/{item['id']}/locations"
@@ -1682,8 +1687,8 @@ class InventoryScreen(QWidget):
                 self._load_items()
             except APIError as e:
                 QMessageBox.critical(self, "Error", e.message)
+
     def _correct_quantity(self, item):
-        # Load location stocks first
         try:
             location_stocks = APIClient.get(
                 f"/inventory/items/{item['id']}/locations"
@@ -1707,7 +1712,9 @@ class InventoryScreen(QWidget):
                     )
                     return
 
-            movement_type = "adjusted" if direction == "add" else "consumed"
+            # Bug 2 fix: use "correction_remove" instead of "consumed" so
+            # the Consumed column is not affected when reducing stock.
+            movement_type = "adjusted" if direction == "add" else "correction_remove"
             note = f"⚙️ Quantity Correction  |  {reason}"
 
             try:
@@ -1734,7 +1741,7 @@ class InventoryScreen(QWidget):
                 self._load_summary()
             except APIError as e:
                 QMessageBox.critical(self, "Error", e.message)
-    
+
     def _move_stock(self, item):
         try:
             location_stocks = APIClient.get(

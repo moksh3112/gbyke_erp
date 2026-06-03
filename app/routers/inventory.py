@@ -14,7 +14,8 @@ from app.models import (
 from app.schemas.inventory import (
     CategoryCreate, CategoryResponse,
     InventoryItemCreate, InventoryItemUpdate,
-    StockAdjustRequest, StockMoveRequest
+    StockAdjustRequest, StockMoveRequest,
+    _COLOUR_UNSET
 )
 
 router = APIRouter(prefix="/inventory", tags=["Inventory"])
@@ -193,7 +194,6 @@ def create_item(
         existing.remaining_quantity += data.total_quantity
         existing.total_quantity     += data.total_quantity
 
-        # Update location stock
         if data.location_id:
             loc_stock = _get_or_create_location_stock(
                 db, existing.id, data.location_id
@@ -266,7 +266,6 @@ def create_item(
     db.commit()
 
     if data.total_quantity > 0:
-        # Record stock movement
         movement = StockMovement(
             item_id       = item.id,
             movement_type = "received",
@@ -276,7 +275,6 @@ def create_item(
         )
         db.add(movement)
 
-        # Record location stock
         if data.location_id:
             loc_stock = InventoryLocationStock(
                 item_id     = item.id,
@@ -313,7 +311,12 @@ def update_item(
         if not data.model_name.strip():
             raise HTTPException(400, "Model name cannot be empty.")
         item.model_name = data.model_name.strip()
-    if data.colour    is not None: item.colour    = data.colour.strip() or None
+
+    # Bug 4 fix: sentinel check — _COLOUR_UNSET means field was not sent at all,
+    # anything else (including "") means explicitly set (empty string clears the colour)
+    if data.colour != _COLOUR_UNSET:
+        item.colour = data.colour.strip() if data.colour.strip() else None
+
     if data.location_id is not None: item.location_id = data.location_id or None
     if data.unit_cost is not None and can_see_financials(current_user):
         item.unit_cost = data.unit_cost
@@ -321,6 +324,7 @@ def update_item(
     db.commit()
     db.refresh(item)
     return _item_to_response(item, current_user)
+
 
 @router.delete("/items/{item_id}")
 def delete_item(
@@ -334,7 +338,6 @@ def delete_item(
     if not item:
         raise HTTPException(404, "Item not found.")
 
-    # Delete all related records first
     db.query(StockMovement).filter(
         StockMovement.item_id == item_id
     ).delete()
@@ -343,11 +346,11 @@ def delete_item(
         InventoryLocationStock.item_id == item_id
     ).delete()
 
-    # Hard delete the item itself
     db.delete(item)
     db.commit()
 
     return {"message": f"'{item.item_name}' permanently deleted."}
+
 
 @router.post("/adjust")
 def adjust_stock(
@@ -363,17 +366,18 @@ def adjust_stock(
     if data.quantity <= 0:
         raise HTTPException(400, "Quantity must be greater than 0.")
 
-    allowed = ["consumed", "defective", "damaged", "adjusted", "received"]
+    # Bug 2 fix: added "correction_remove" as a valid movement type
+    allowed = ["consumed", "defective", "damaged", "adjusted", "received", "correction_remove"]
     if data.movement_type not in allowed:
         raise HTTPException(400, "Invalid movement type.")
 
-    if data.movement_type in ["consumed", "defective", "damaged"]:
+    # Stock availability checks for all deduction types
+    if data.movement_type in ["consumed", "defective", "damaged", "correction_remove"]:
         if item.remaining_quantity < data.quantity:
             raise HTTPException(
                 400,
                 f"Not enough stock. Available: {item.remaining_quantity} pcs"
             )
-        # Check location stock if location provided
         if data.location_id:
             loc_stock = db.query(InventoryLocationStock).filter(
                 InventoryLocationStock.item_id     == data.item_id,
@@ -395,6 +399,10 @@ def adjust_stock(
     if data.movement_type == "consumed":
         item.consumed_quantity  += data.quantity
         item.remaining_quantity -= data.quantity
+    elif data.movement_type == "correction_remove":
+        # Bug 2 fix: only deducts remaining_quantity — does NOT touch
+        # consumed_quantity, so the Consumed column stays clean
+        item.remaining_quantity -= data.quantity
     elif data.movement_type == "defective":
         item.defective_quantity += data.quantity
         item.remaining_quantity -= data.quantity
@@ -411,7 +419,7 @@ def adjust_stock(
             InventoryLocationStock.item_id     == data.item_id,
             InventoryLocationStock.location_id == data.location_id
         ).first()
-        if data.movement_type in ["consumed", "defective", "damaged"]:
+        if data.movement_type in ["consumed", "defective", "damaged", "correction_remove"]:
             if loc_stock:
                 loc_stock.quantity -= data.quantity
         elif data.movement_type in ["adjusted", "received"]:
@@ -440,6 +448,7 @@ def adjust_stock(
         "item":    _item_to_response(item, current_user)
     }
 
+
 # ── STOCK MOVE ────────────────────────────────────────────────
 
 @router.post("/move")
@@ -454,14 +463,12 @@ def move_stock(
     if data.quantity <= 0:
         raise HTTPException(400, "Quantity must be greater than 0.")
 
-    # Check item exists
     item = db.query(InventoryItem).filter(
         InventoryItem.id == data.item_id
     ).first()
     if not item:
         raise HTTPException(404, "Item not found.")
 
-    # Check source location has enough stock
     from_stock = db.query(InventoryLocationStock).filter(
         InventoryLocationStock.item_id     == data.item_id,
         InventoryLocationStock.location_id == data.from_location_id
@@ -475,20 +482,16 @@ def move_stock(
             f"Available: {available} pcs"
         )
 
-    # Get or create destination location stock
     to_stock = _get_or_create_location_stock(
         db, data.item_id, data.to_location_id
     )
 
-    # Move the stock
     from_stock.quantity -= data.quantity
     to_stock.quantity   += data.quantity
 
-    # Update primary location on item if source is now empty
     if from_stock.quantity == 0 and item.location_id == data.from_location_id:
         item.location_id = data.to_location_id
 
-    # Record movement
     from_loc = db.query(Location).filter(
         Location.id == data.from_location_id
     ).first()
@@ -519,6 +522,7 @@ def move_stock(
 
 
 # ── MOVEMENTS ─────────────────────────────────────────────────
+
 @router.get("/movements/{item_id}")
 def get_movements(
     item_id:      str,
@@ -572,6 +576,9 @@ def get_movements(
                 consumed.append(entry)
         elif m.movement_type == "transferred":
             transfers.append(entry)
+        elif m.movement_type == "correction_remove":
+            # Bug 2 fix: correction_remove always goes to corrections section
+            corrections.append(entry)
 
     return {
         "imports":     imports,
@@ -580,6 +587,7 @@ def get_movements(
         "transfers":   transfers,
         "corrections": corrections,
     }
+
 
 # ── MODELS LIST ───────────────────────────────────────────────
 

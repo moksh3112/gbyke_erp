@@ -2,6 +2,8 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime, date
 
+_COLOUR_UNSET = "__COLOUR_UNSET__"
+
 
 class CategoryCreate(BaseModel):
     name: str
@@ -39,7 +41,7 @@ class InventoryItemUpdate(BaseModel):
     unit_cost:           Optional[float] = None
     is_spare_part:       Optional[bool]  = None
     model_name:          Optional[str]   = None
-    colour:              Optional[str]   = None
+    colour:              str             = _COLOUR_UNSET   # sentinel: __COLOUR_UNSET__ means "not touched", "" means "clear it"
     location_id:         Optional[str]   = None
 
 
@@ -74,7 +76,7 @@ class StockAdjustRequest(BaseModel):
     quantity:      int
     movement_type: str
     notes:         Optional[str] = None
-    location_id:   Optional[str] = None  # ← add this
+    location_id:   Optional[str] = None
 
 
 class StockMovementResponse(BaseModel):
@@ -90,7 +92,7 @@ class StockMovementResponse(BaseModel):
 
     class Config:
         from_attributes = True
-        
+
 class StockMoveRequest(BaseModel):
     item_id:          str
     from_location_id: str
