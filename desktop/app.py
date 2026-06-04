@@ -108,6 +108,9 @@ class MainWindow(QMainWindow):
         elif screen == "users":
             from desktop.screens.users import UsersScreen
             widget = UsersScreen()
+        elif screen == "pdi":
+            from desktop.screens.pdi import PDIScreen
+            widget = PDIScreen()
         else:
             widget = QWidget()
             from PyQt6.QtWidgets import QLabel

@@ -12,6 +12,7 @@ class BOMItemCreate(BaseModel):
     inventory_item_id: Optional[str] = None   # optional backward compat
     quantity_required: int
     colour:            Optional[str] = None
+    battery_type:      Optional[str] = None   # Added to match new architecture
     power_spec:        Optional[str] = None
     notes:             Optional[str] = None
 
@@ -21,6 +22,7 @@ class BOMItemUpdate(BaseModel):
     sku:               Optional[str] = None
     quantity_required: Optional[int] = None
     colour:            Optional[str] = None
+    battery_type:      Optional[str] = None
     power_spec:        Optional[str] = None
     notes:             Optional[str] = None
 
@@ -35,6 +37,7 @@ class BOMItemResponse(BaseModel):
     item_name:         Optional[str] = None   # from inventory if linked
     quantity_required: int
     colour:            Optional[str] = None
+    battery_type:      Optional[str] = None
     power_spec:        Optional[str] = None
     notes:             Optional[str] = None
 
@@ -45,10 +48,13 @@ class BOMItemResponse(BaseModel):
 # ── ASSEMBLY JOBS ─────────────────────────────────────────────
 
 class AssemblyJobCreate(BaseModel):
-    variant_id:  str
-    quantity:    int
-    location_id: Optional[str] = None
-    notes:       Optional[str] = None
+    model_id:     str
+    color:        str
+    battery_type: str
+    power_spec:   str
+    quantity:     int
+    location_id:  Optional[str] = None
+    notes:        Optional[str] = None
 
 
 class AssemblyJobUpdate(BaseModel):
@@ -59,12 +65,11 @@ class AssemblyJobUpdate(BaseModel):
 
 class AssemblyJobResponse(BaseModel):
     id:                str
-    variant_id:        str
+    model_id:          str
     model_name:        Optional[str] = None
     color:             Optional[str] = None
     battery_type:      Optional[str] = None
     power_spec:        Optional[str] = None
-    variant_code:      Optional[str] = None
     quantity:          int
     location_id:       Optional[str] = None
     location_name:     Optional[str] = None

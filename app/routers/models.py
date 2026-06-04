@@ -5,10 +5,11 @@ from app.database import get_db
 from app.core.dependencies import (
     require_any_role, require_manager_or_above, require_superadmin
 )
-from app.models import ScooterModel, ScooterVariant, Location, User
+from app.models import ScooterModel, MasterColor, MasterBattery, Location, User
 from app.schemas.models import (
     ScooterModelCreate, ScooterModelUpdate, ScooterModelResponse,
-    ScooterVariantCreate, ScooterVariantResponse,
+    MasterColorCreate, MasterColorResponse,
+    MasterBatteryCreate, MasterBatteryResponse,
     LocationCreate, LocationUpdate, LocationResponse
 )
 
@@ -103,98 +104,104 @@ def delete_model(
     return {"message": f"Model '{model.model_name}' deactivated."}
 
 
-# ── SCOOTER VARIANTS ──────────────────────────────────────────
+# ── MASTER COLORS ─────────────────────────────────────────────
 
-@router.get("/variants", response_model=List[ScooterVariantResponse])
-def get_variants(
-    db:           Session       = Depends(get_db),
-    current_user: User          = Depends(require_any_role),
-    model_id:     Optional[str] = None
+@router.get("/colors", response_model=List[MasterColorResponse])
+def get_colors(
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_any_role)
 ):
-    query = db.query(ScooterVariant).filter(
-        ScooterVariant.is_active == True
-    )
-    if model_id:
-        query = query.filter(ScooterVariant.model_id == model_id)
-
-    variants = query.all()
-    result   = []
-    for v in variants:
-        model = db.query(ScooterModel).filter(
-            ScooterModel.id == v.model_id
-        ).first()
-        result.append({
-            "id":           v.id,
-            "model_id":     v.model_id,
-            "color":        v.color,
-            "battery_type": v.battery_type,
-            "power_spec":   v.power_spec,
-            "variant_code": v.variant_code,
-            "is_active":    v.is_active,
-            "model_name":   model.model_name if model else None
-        })
-    return result
+    return db.query(MasterColor).order_by(MasterColor.name).all()
 
 
-@router.post("/variants", response_model=ScooterVariantResponse)
-def create_variant(
-    data:         ScooterVariantCreate,
+@router.post("/colors", response_model=MasterColorResponse)
+def create_color(
+    data:         MasterColorCreate,
     db:           Session = Depends(get_db),
     current_user: User    = Depends(require_manager_or_above)
 ):
-    # Check model exists
-    model = db.query(ScooterModel).filter(
-        ScooterModel.id == data.model_id
-    ).first()
-    if not model:
-        raise HTTPException(404, "Scooter model not found.")
+    name_clean = data.name.strip()
+    if db.query(MasterColor).filter(MasterColor.name == name_clean).first():
+        raise HTTPException(400, f"Color '{name_clean}' already exists.")
 
-    # Check variant code uniqueness
-    if db.query(ScooterVariant).filter(
-        ScooterVariant.variant_code == data.variant_code.upper()
-    ).first():
+    color = MasterColor(name=name_clean)
+    db.add(color)
+    db.commit()
+    db.refresh(color)
+    return color
+
+
+@router.delete("/colors/{color_id}")
+def delete_color(
+    color_id:     str,
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_manager_or_above)
+):
+    color = db.query(MasterColor).filter(MasterColor.id == color_id).first()
+    if not color:
+        raise HTTPException(404, "Color not found.")
+
+    db.delete(color)
+    db.commit()
+    return {"message": f"Color '{color.name}' deleted successfully."}
+
+
+# ── MASTER BATTERIES ──────────────────────────────────────────
+
+@router.get("/batteries", response_model=List[MasterBatteryResponse])
+def get_batteries(
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_any_role)
+):
+    return db.query(MasterBattery).order_by(
+        MasterBattery.battery_type, 
+        MasterBattery.power_spec
+    ).all()
+
+
+@router.post("/batteries", response_model=MasterBatteryResponse)
+def create_battery(
+    data:         MasterBatteryCreate,
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_manager_or_above)
+):
+    b_type_clean = data.battery_type.strip()
+    p_spec_clean = data.power_spec.strip()
+
+    exists = db.query(MasterBattery).filter(
+        MasterBattery.battery_type == b_type_clean,
+        MasterBattery.power_spec == p_spec_clean
+    ).first()
+
+    if exists:
         raise HTTPException(
-            400, f"Variant code '{data.variant_code}' already exists."
+            400, 
+            f"Battery configuration '{b_type_clean}' with '{p_spec_clean}' already exists."
         )
 
-    variant = ScooterVariant(
-        model_id     = data.model_id,
-        color        = data.color.strip(),
-        battery_type = data.battery_type.strip(),
-        power_spec   = data.power_spec,
-        variant_code = data.variant_code.upper().strip()
+    battery = MasterBattery(
+        battery_type = b_type_clean,
+        power_spec   = p_spec_clean
     )
-    db.add(variant)
+    db.add(battery)
     db.commit()
-    db.refresh(variant)
-
-    return {
-        "id":           variant.id,
-        "model_id":     variant.model_id,
-        "color":        variant.color,
-        "battery_type": variant.battery_type,
-        "power_spec":   variant.power_spec,
-        "variant_code": variant.variant_code,
-        "is_active":    variant.is_active,
-        "model_name":   model.model_name
-    }
+    db.refresh(battery)
+    return battery
 
 
-@router.delete("/variants/{variant_id}")
-def delete_variant(
-    variant_id:   str,
+@router.delete("/batteries/{battery_id}")
+def delete_battery(
+    battery_id:   str,
     db:           Session = Depends(get_db),
     current_user: User    = Depends(require_manager_or_above)
 ):
-    variant = db.query(ScooterVariant).filter(
-        ScooterVariant.id == variant_id
-    ).first()
-    if not variant:
-        raise HTTPException(404, "Variant not found.")
+    battery = db.query(MasterBattery).filter(MasterBattery.id == battery_id).first()
+    if not battery:
+        raise HTTPException(404, "Battery not found.")
 
-    variant.is_active = False
+    db.delete(battery)
     db.commit()
-    return {"message": "Variant deactivated."}
+    return {"message": "Battery configuration deleted successfully."}
 
 
 # ── LOCATIONS ─────────────────────────────────────────────────

@@ -25,24 +25,27 @@ class ScooterModelResponse(BaseModel):
         from_attributes = True
 
 
-# ── SCOOTER VARIANTS ──────────────────────────────────────────
+# ── MASTER COLORS & BATTERIES ─────────────────────────────────
 
-class ScooterVariantCreate(BaseModel):
-    model_id:     str
-    color:        str
+class MasterColorCreate(BaseModel):
+    name: str
+
+class MasterColorResponse(BaseModel):
+    id:   str
+    name: str
+
+    class Config:
+        from_attributes = True
+
+
+class MasterBatteryCreate(BaseModel):
     battery_type: str
-    power_spec:   Optional[str] = None
-    variant_code: str
+    power_spec:   str
 
-class ScooterVariantResponse(BaseModel):
+class MasterBatteryResponse(BaseModel):
     id:           str
-    model_id:     str
-    color:        str
     battery_type: str
-    power_spec:   Optional[str] = None
-    variant_code: str
-    is_active:    bool
-    model_name:   Optional[str] = None
+    power_spec:   str
 
     class Config:
         from_attributes = True

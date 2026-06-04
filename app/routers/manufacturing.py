@@ -6,7 +6,7 @@ from app.core.dependencies import (
     require_manager_or_above, require_any_role, require_superadmin
 )
 from app.models import (
-    BOMItem, InventoryItem, ScooterModel, ScooterVariant,
+    BOMItem, InventoryItem, ScooterModel,
     AssemblyJob, ScooterUnit, StockMovement, Location, User,
     InventoryLocationStock
 )
@@ -50,18 +50,16 @@ def _bom_to_response(b: BOMItem, db: Session) -> dict:
         "item_name":         item_name,
         "quantity_required": b.quantity_required,
         "colour":            b.colour,
+        "battery_type":      b.battery_type,
         "power_spec":        b.power_spec,
         "notes":             b.notes,
     }
 
 
 def _job_to_response(job: AssemblyJob, db: Session) -> dict:
-    variant = db.query(ScooterVariant).filter(
-        ScooterVariant.id == job.variant_id
-    ).first()
     model = db.query(ScooterModel).filter(
-        ScooterModel.id == variant.model_id
-    ).first() if variant else None
+        ScooterModel.id == job.model_id
+    ).first()
     location = db.query(Location).filter(
         Location.id == job.location_id
     ).first() if job.location_id else None
@@ -74,35 +72,33 @@ def _job_to_response(job: AssemblyJob, db: Session) -> dict:
     ).count()
 
     return {
-        "id":               job.id,
-        "variant_id":       job.variant_id,
-        "model_name":       model.model_name if model else None,
-        "color":            variant.color if variant else None,
-        "battery_type":     variant.battery_type if variant else None,
-        "power_spec":       variant.power_spec if variant else None,
-        "variant_code":     variant.variant_code if variant else None,
-        "quantity":         job.quantity,
-        "location_id":      job.location_id,
-        "location_name":    location.name if location else None,
-        "status":           job.status.value if job.status else "pending",
-        "started_at":       job.started_at.strftime("%d-%b-%Y %H:%M") if job.started_at else None,
-        "completed_at":     job.completed_at.strftime("%d-%b-%Y %H:%M") if job.completed_at else None,
-        "performed_by":     job.performed_by,
+        "id":                job.id,
+        "model_id":          job.model_id,
+        "model_name":        model.model_name if model else None,
+        "color":             job.color,
+        "battery_type":      job.battery_type,
+        "power_spec":        job.power_spec,
+        "quantity":          job.quantity,
+        "location_id":       job.location_id,
+        "location_name":     location.name if location else None,
+        "status":            job.status.value if job.status else "pending",
+        "started_at":        job.started_at.strftime("%d-%b-%Y %H:%M") if job.started_at else None,
+        "completed_at":      job.completed_at.strftime("%d-%b-%Y %H:%M") if job.completed_at else None,
+        "performed_by":      job.performed_by,
         "performed_by_name": performer.full_name if performer else None,
-        "notes":            job.notes,
-        "created_at":       job.created_at.strftime("%d-%b-%Y %H:%M") if job.created_at else None,
-        "units_created":    units_created,
+        "notes":             job.notes,
+        "created_at":        job.created_at.strftime("%d-%b-%Y %H:%M") if job.created_at else None,
+        "units_created":     units_created,
     }
 
 
 def _get_applicable_bom_items(
-    db: Session, model_id: str, colour: str, power_spec: str
+    db: Session, model_id: str, colour: str, battery_type: str, power_spec: str
 ) -> List[BOMItem]:
     """
-    Returns BOM items applicable for this variant.
-    - Items with no colour filter → always included
-    - Items with colour filter → only if colour matches
-    - Items with power_spec filter → only if power_spec matches
+    Returns BOM items applicable for this specific configuration.
+    - Items with no filter → always included
+    - Items with specific filters → only if they match the selected attribute
     """
     all_items = db.query(BOMItem).filter(
         BOMItem.model_id == model_id
@@ -111,6 +107,8 @@ def _get_applicable_bom_items(
     applicable = []
     for item in all_items:
         if item.colour and item.colour.lower() != (colour or "").lower():
+            continue
+        if item.battery_type and item.battery_type.lower() != (battery_type or "").lower():
             continue
         if item.power_spec and item.power_spec.lower() != (power_spec or "").lower():
             continue
@@ -123,41 +121,32 @@ def _find_inventory_item(db: Session, bom: BOMItem) -> Optional[InventoryItem]:
     Find matching inventory item for a BOM item.
     Priority: SKU match → exact name match → partial name match
     """
-    # 1. Direct link
     if bom.inventory_item_id:
         item = db.query(InventoryItem).filter(
             InventoryItem.id       == bom.inventory_item_id,
             InventoryItem.is_active == True
         ).first()
-        if item:
-            return item
+        if item: return item
 
-    # 2. SKU match
     if bom.sku:
         item = db.query(InventoryItem).filter(
             InventoryItem.sku       == bom.sku,
             InventoryItem.is_active == True
         ).first()
-        if item:
-            return item
+        if item: return item
 
-    # 3. Exact name match
     if bom.part_name:
         item = db.query(InventoryItem).filter(
             InventoryItem.item_name == bom.part_name,
             InventoryItem.is_active == True
         ).first()
-        if item:
-            return item
+        if item: return item
 
-    # 4. Partial name match (case insensitive)
-    if bom.part_name:
         item = db.query(InventoryItem).filter(
             InventoryItem.item_name.ilike(f"%{bom.part_name}%"),
             InventoryItem.is_active == True
         ).first()
-        if item:
-            return item
+        if item: return item
 
     return None
 
@@ -182,10 +171,6 @@ def get_bom_part_names(
     db:           Session = Depends(get_db),
     current_user: User    = Depends(require_any_role)
 ):
-    """
-    Returns just the part names for a model's BOM.
-    Used by Inventory Add Stock dialog to populate part name dropdown.
-    """
     items = db.query(BOMItem).filter(
         BOMItem.model_id == model_id
     ).all()
@@ -197,10 +182,11 @@ def get_bom_part_names(
         )
         if name:
             result.append({
-                "part_name": name,
-                "sku":       item.sku,
-                "colour":    item.colour,
-                "power_spec": item.power_spec,
+                "part_name":    name,
+                "sku":          item.sku,
+                "colour":       item.colour,
+                "battery_type": item.battery_type,
+                "power_spec":   item.power_spec,
             })
     return result
 
@@ -228,6 +214,7 @@ def create_bom_item(
         inventory_item_id = data.inventory_item_id or None,
         quantity_required = data.quantity_required,
         colour            = data.colour.strip() if data.colour else None,
+        battery_type      = data.battery_type.strip() if data.battery_type else None,
         power_spec        = data.power_spec.strip() if data.power_spec else None,
         notes             = data.notes,
     )
@@ -252,6 +239,7 @@ def update_bom_item(
     if data.sku               is not None: item.sku               = data.sku.strip().upper() or None
     if data.quantity_required is not None: item.quantity_required = data.quantity_required
     if data.colour            is not None: item.colour            = data.colour.strip() or None
+    if data.battery_type      is not None: item.battery_type      = data.battery_type.strip() or None
     if data.power_spec        is not None: item.power_spec        = data.power_spec.strip() or None
     if data.notes             is not None: item.notes             = data.notes
 
@@ -282,30 +270,52 @@ def check_stock(
     db:           Session = Depends(get_db),
     current_user: User    = Depends(require_any_role)
 ):
-    variant = db.query(ScooterVariant).filter(
-        ScooterVariant.id == data.variant_id
+    model = db.query(ScooterModel).filter(
+        ScooterModel.id == data.model_id
     ).first()
-    if not variant:
-        raise HTTPException(404, "Variant not found.")
+    if not model:
+        raise HTTPException(404, "Model not found.")
 
     bom_items = _get_applicable_bom_items(
-        db, variant.model_id, variant.color, variant.power_spec
+        db, data.model_id, data.color, data.battery_type, data.power_spec
     )
-
+    
     shortages = []
     for bom in bom_items:
         inv = _find_inventory_item(db, bom)
-        required  = bom.quantity_required * data.quantity
-        available = inv.remaining_quantity if inv else 0
-        if available < required:
-            shortages.append(StockShortageItem(
-                part_name = bom.part_name or (inv.item_name if inv else "Unknown"),
-                sku       = bom.sku,
-                required  = required,
-                available = available,
-                shortage  = required - available,
-            ))
+        part_name = bom.part_name or (inv.item_name if inv else "Unknown Part")
+        required = bom.quantity_required * data.quantity
 
+        if not inv:
+            shortages.append(
+                f"'{part_name}' — completely missing from inventory (need {required})"
+            )
+            continue  
+
+        if data.location_id:
+            loc_stock = db.query(InventoryLocationStock).filter(
+                InventoryLocationStock.item_id == inv.id,
+                InventoryLocationStock.location_id == data.location_id
+            ).first()
+            
+            available = loc_stock.quantity if loc_stock else 0
+            if available < required:
+                shortages.append(
+                    f"'{part_name}' — need {required}, have {available} at this location"
+                )
+        else:
+            available = inv.remaining_quantity
+            if available < required:
+                shortages.append(
+                    f"'{part_name}' — need {required}, have {available} globally"
+                )
+
+    if shortages:
+        raise HTTPException(
+            400,
+            "Insufficient stock for the following parts:\n" +
+            "\n".join(shortages)
+        )
     return StockCheckResponse(
         can_produce = len(shortages) == 0,
         shortages   = shortages,
@@ -342,65 +352,69 @@ def get_job(
         raise HTTPException(404, "Assembly job not found.")
     return _job_to_response(job, db)
 
-
 @router.post("/jobs")
 def create_job(
     data:         AssemblyJobCreate,
     db:           Session = Depends(get_db),
     current_user: User    = Depends(require_manager_or_above)
 ):
-    """
-    Creates an assembly job and immediately deducts parts from inventory.
-    Matches BOM items to inventory by SKU first, then by name.
-    Blocks if any matched part has insufficient stock.
-    Parts not found in inventory are skipped with a note.
-    """
-    variant = db.query(ScooterVariant).filter(
-        ScooterVariant.id == data.variant_id
+    model = db.query(ScooterModel).filter(
+        ScooterModel.id == data.model_id
     ).first()
-    if not variant:
-        raise HTTPException(404, "Variant not found.")
+    if not model:
+        raise HTTPException(404, "Scooter Model not found.")
 
     if data.quantity <= 0:
         raise HTTPException(400, "Quantity must be greater than 0.")
 
     bom_items = _get_applicable_bom_items(
-        db, variant.model_id, variant.color, variant.power_spec
+        db, data.model_id, data.color, data.battery_type, data.power_spec
     )
 
     if not bom_items:
         raise HTTPException(
             400,
-            "No BOM defined for this model/variant. "
-            "Please set up the BOM first in the BOM tab."
+            f"No BOM defined for {model.model_name} ({data.battery_type} - {data.power_spec}). "
+            "Please configure the BOM first."
         )
 
-    # ── Stock check — only check parts found in inventory ────
     shortages = []
     for bom in bom_items:
         inv = _find_inventory_item(db, bom)
+        part_name = bom.part_name or (inv.item_name if inv else "Unknown Part")
+        required = bom.quantity_required * data.quantity
+
         if not inv:
-            continue  # part not in inventory yet — skip, don't block
-        required  = bom.quantity_required * data.quantity
-        available = inv.remaining_quantity
-        if available < required:
-            shortages.append(
-                f"'{bom.part_name or inv.item_name}' — "
-                f"need {required}, have {available}"
-            )
+            shortages.append(f"'{part_name}' — completely missing from inventory (need {required})")
+            continue  
+
+        if data.location_id:
+            loc_stock = db.query(InventoryLocationStock).filter(
+                InventoryLocationStock.item_id == inv.id,
+                InventoryLocationStock.location_id == data.location_id
+            ).first()
+            
+            available = loc_stock.quantity if loc_stock else 0
+            if available < required:
+                shortages.append(f"'{part_name}' — need {required}, have {available} at this location")
+        else:
+            available = inv.remaining_quantity
+            if available < required:
+                shortages.append(f"'{part_name}' — need {required}, have {available} globally")
 
     if shortages:
         raise HTTPException(
-            400,
-            "Insufficient stock for the following parts:\n" +
-            "\n".join(shortages)
+            status_code=400,
+            detail="Insufficient stock for the following parts:\n" + "\n".join(shortages)
         )
 
-    # ── Create the job ────────────────────────────────────────
     from datetime import datetime, timezone
     job = AssemblyJob(
         id           = gen_uuid(),
-        variant_id   = data.variant_id,
+        model_id     = data.model_id,
+        color        = data.color,
+        battery_type = data.battery_type,
+        power_spec   = data.power_spec,
         quantity     = data.quantity,
         location_id  = data.location_id,
         status       = AssemblyStatus.in_progress,
@@ -411,11 +425,9 @@ def create_job(
     db.add(job)
     db.flush()
 
-    # ── Deduct parts from inventory ───────────────────────────
     for bom in bom_items:
         inv = _find_inventory_item(db, bom)
-        if not inv:
-            continue  # part not in inventory — skip silently
+        if not inv: continue 
 
         required = bom.quantity_required * data.quantity
         inv.consumed_quantity  += required
@@ -426,7 +438,7 @@ def create_job(
                 InventoryLocationStock.item_id     == inv.id,
                 InventoryLocationStock.location_id == data.location_id
             ).first()
-            if loc_stock and loc_stock.quantity >= required:
+            if loc_stock: 
                 loc_stock.quantity -= required
 
         movement = StockMovement(
@@ -437,9 +449,7 @@ def create_job(
             location_id    = data.location_id,
             reference_id   = job.id,
             reference_type = "assembly_job",
-            notes          = (
-                f"Assembly Job — {variant.variant_code} × {data.quantity} units"
-            ),
+            notes          = f"Assembly Job — {model.model_name} ({data.color}) × {data.quantity} units",
             performed_by   = current_user.id,
         )
         db.add(movement)
@@ -447,7 +457,6 @@ def create_job(
     db.commit()
     db.refresh(job)
     return _job_to_response(job, db)
-
 
 @router.post("/jobs/{job_id}/complete")
 def complete_job(
@@ -474,7 +483,10 @@ def complete_job(
             id                  = gen_uuid(),
             serial_number       = f"PENDING-{job_id[:8]}-{i+1:04d}",
             chassis_number      = None,
-            variant_id          = job.variant_id,
+            model_id            = job.model_id,
+            color               = job.color,
+            battery_type        = job.battery_type,
+            power_spec          = job.power_spec,
             assembly_job_id     = job.id,
             current_location_id = job.location_id,
             status              = VehicleStatus.manufacturing_done,
@@ -500,12 +512,9 @@ def cancel_job(
     if job.status == AssemblyStatus.cancelled:
         raise HTTPException(400, "Job is already cancelled.")
 
-    variant   = db.query(ScooterVariant).filter(
-        ScooterVariant.id == job.variant_id
-    ).first()
     bom_items = _get_applicable_bom_items(
-        db, variant.model_id, variant.color, variant.power_spec
-    ) if variant else []
+        db, job.model_id, job.color, job.battery_type, job.power_spec
+    )
 
     for bom in bom_items:
         inv = _find_inventory_item(db, bom)
@@ -578,6 +587,32 @@ def delete_job(
     job = db.query(AssemblyJob).filter(AssemblyJob.id == job_id).first()
     if not job:
         raise HTTPException(404, "Assembly job not found.")
+        
+    if job.status != AssemblyStatus.cancelled:
+        bom_items = _get_applicable_bom_items(
+            db, job.model_id, job.color, job.battery_type, job.power_spec
+        )
+        
+        for bom in bom_items:
+            inv = _find_inventory_item(db, bom)
+            if not inv:
+                continue
+                
+            returned = bom.quantity_required * job.quantity
+            inv.consumed_quantity  -= returned
+            inv.remaining_quantity += returned
+            
+            if job.location_id:
+                loc_stock = db.query(InventoryLocationStock).filter(
+                    InventoryLocationStock.item_id     == inv.id,
+                    InventoryLocationStock.location_id == job.location_id
+                ).first()
+                if loc_stock:
+                    loc_stock.quantity += returned
+
+    db.query(StockMovement).filter(StockMovement.reference_id == job.id).delete()
+    db.query(ScooterUnit).filter(ScooterUnit.assembly_job_id == job.id).delete()
+    
     db.delete(job)
     db.commit()
-    return {"message": "Job deleted."}
+    return {"message": "Job deleted and parts successfully returned to inventory."}

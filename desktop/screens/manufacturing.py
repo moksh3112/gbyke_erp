@@ -11,6 +11,7 @@ from PyQt6.QtGui import QFont, QColor, QAction
 from desktop.utils.api_client import APIClient, APIError
 from desktop.utils.session import Session
 import re
+
 # ── WORKERS ───────────────────────────────────────────────────
 
 class LoadModelsWorker(QThread):
@@ -128,16 +129,24 @@ class AddBOMItemDialog(QDialog):
         self.colour_input = QLineEdit()
         self.colour_input.setFixedHeight(36)
         self.colour_input.setStyleSheet(inp)
-        self.colour_input.setPlaceholderText("e.g. Red — only for Red scooters. Blank = all colours.")
+        self.colour_input.setPlaceholderText("e.g. Red — only for Red. Blank = all.")
         self.colour_input.textChanged.connect(self._update_sku)
         cl = QLabel("Colour Filter"); cl.setStyleSheet(lbl)
         form.addRow(cl, self.colour_input)
+
+        # Battery filter — optional
+        self.battery_input = QLineEdit()
+        self.battery_input.setFixedHeight(36)
+        self.battery_input.setStyleSheet(inp)
+        self.battery_input.setPlaceholderText("e.g. Lithium Ion. Blank = all.")
+        bl = QLabel("Battery Filter"); bl.setStyleSheet(lbl)
+        form.addRow(bl, self.battery_input)
 
         # Power spec filter — optional
         self.power_input = QLineEdit()
         self.power_input.setFixedHeight(36)
         self.power_input.setStyleSheet(inp)
-        self.power_input.setPlaceholderText("e.g. 72V — only for 72V variant. Blank = all.")
+        self.power_input.setPlaceholderText("e.g. 72V 30Ah. Blank = all.")
         pwl = QLabel("Power Spec Filter"); pwl.setStyleSheet(lbl)
         form.addRow(pwl, self.power_input)
 
@@ -197,9 +206,9 @@ class AddBOMItemDialog(QDialog):
             QMessageBox.warning(self, "Missing", "Part name is required.")
             return
 
-        # Generate the actual SKU to store
         def clean(text):
             return re.sub(r'[^a-zA-Z0-9]', '', str(text)).upper()[:8]
+            
         colour = self.colour_input.text().strip()
         sku = None
         if self.model_code and name:
@@ -213,6 +222,7 @@ class AddBOMItemDialog(QDialog):
             "sku":               sku,
             "quantity_required": self.qty_spin.value(),
             "colour":            colour or None,
+            "battery_type":      self.battery_input.text().strip() or None,
             "power_spec":        self.power_input.text().strip() or None,
             "notes":             self.notes_input.toPlainText().strip() or None,
         }
@@ -222,13 +232,15 @@ class AddBOMItemDialog(QDialog):
 # ── CREATE JOB DIALOG ─────────────────────────────────────────
 
 class CreateJobDialog(QDialog):
-    def __init__(self, parent, variants, locations):
+    def __init__(self, parent, models, master_colors, master_batteries, locations):
         super().__init__(parent)
-        self.variants    = variants
-        self.locations   = locations
-        self.result_data = {}
-        self.setWindowTitle("Create Assembly Job")
-        self.setFixedWidth(500)
+        self.models           = models
+        self.master_colors    = master_colors
+        self.master_batteries = master_batteries
+        self.locations        = locations
+        self.result_data      = {}
+        self.setWindowTitle("Create Configurable Assembly Job")
+        self.setFixedWidth(550)
         self.setModal(True)
         self._build_ui()
 
@@ -238,48 +250,59 @@ class CreateJobDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
 
         info = QLabel(
-            "⚠️  Parts will be deducted from inventory immediately.\n"
-            "Job will be blocked if any matched part has insufficient stock."
+            "⚠️ Parts will be deducted from inventory immediately based on the Model and Configuration."
         )
-        info.setStyleSheet(
-            "background:#fef9c3; color:#854d0e; padding:10px 12px; border-radius:6px; font-size:12px;"
-        )
+        info.setStyleSheet("background:#fef9c3; color:#854d0e; padding:10px; border-radius:6px; font-size:12px;")
         info.setWordWrap(True)
         layout.addWidget(info)
 
         form = QFormLayout()
         form.setSpacing(12)
-        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        form.setHorizontalSpacing(16)
+        
+        lbl = "font-size:13px; font-weight:500; color:#374151;"
+        inp = "border:1px solid #ddd; border-radius:4px; padding:0 8px; background:white; height:36px; color:#1a1a1a;"
 
-        lbl  = "font-size:13px; font-weight:500; color:#374151;"
-        inp  = "border:1px solid #ddd; border-radius:4px; padding:0 8px; color:#1a1a1a; background:white;"
-        spin = "color:#1a1a1a; background:white; border:1px solid #ddd; border-radius:4px; padding:0 8px;"
+        # 1. Model Dropdown
+        self.model_combo = QComboBox()
+        self.model_combo.setStyleSheet(inp)
+        self.model_combo.addItem("-- Select Model --", "")
+        for m in self.models:
+            self.model_combo.addItem(m["model_name"], m["id"])
+        form.addRow(QLabel("Scooter Model *", styleSheet=lbl), self.model_combo)
 
-        self.variant_combo = QComboBox()
-        self.variant_combo.setFixedHeight(36)
-        self.variant_combo.setStyleSheet(inp)
-        for v in self.variants:
-            display = (
-                f"{v.get('model_name','?')}  |  "
-                f"{v.get('color','?')}  |  "
-                f"{v.get('battery_type','?')}  "
-                f"{v.get('power_spec','') or ''}"
-            ).strip()
-            self.variant_combo.addItem(display, v["id"])
-        form.addRow(QLabel("Model / Variant *", styleSheet=lbl), self.variant_combo)
+        # 2. Color Dropdown
+        self.color_combo = QComboBox()
+        self.color_combo.setStyleSheet(inp)
+        self.color_combo.addItem("-- Select Colour --", "")
+        for c in self.master_colors:
+            self.color_combo.addItem(c["name"], c["name"])
+        form.addRow(QLabel("Colour *", styleSheet=lbl), self.color_combo)
 
+        # 3. Battery Type Dropdown
+        self.battery_type_combo = QComboBox()
+        self.battery_type_combo.setStyleSheet(inp)
+        self.battery_type_combo.addItem("-- Select Battery Type --", "")
+        unique_types = sorted(list(set([b["battery_type"] for b in self.master_batteries])))
+        for b_type in unique_types:
+            self.battery_type_combo.addItem(b_type, b_type)
+        self.battery_type_combo.currentIndexChanged.connect(self._on_battery_type_changed)
+        form.addRow(QLabel("Battery Type *", styleSheet=lbl), self.battery_type_combo)
+
+        # 4. Power Spec Dropdown (Dependent)
+        self.power_combo = QComboBox()
+        self.power_combo.setStyleSheet(inp)
+        self.power_combo.addItem("-- Select Power Spec --", "")
+        form.addRow(QLabel("Power Spec *", styleSheet=lbl), self.power_combo)
+
+        # 5. Quantity
         self.qty_spin = QSpinBox()
-        self.qty_spin.setFixedHeight(36)
+        self.qty_spin.setStyleSheet(inp)
         self.qty_spin.setMinimum(1)
         self.qty_spin.setMaximum(9999)
-        self.qty_spin.setValue(1)
-        self.qty_spin.setStyleSheet(spin)
         form.addRow(QLabel("Units to Produce *", styleSheet=lbl), self.qty_spin)
 
+        # 6. Location
         self.location_combo = QComboBox()
-        self.location_combo.setFixedHeight(36)
         self.location_combo.setStyleSheet(inp)
         self.location_combo.addItem("-- Select Location --", "")
         for loc in self.locations:
@@ -290,37 +313,57 @@ class CreateJobDialog(QDialog):
         self.notes_input = QTextEdit()
         self.notes_input.setFixedHeight(60)
         self.notes_input.setPlaceholderText("Optional notes...")
-        self.notes_input.setStyleSheet("color:#1a1a1a;")
+        self.notes_input.setStyleSheet("border:1px solid #ddd; border-radius:4px; padding:4px; color:#1a1a1a;")
         form.addRow(QLabel("Notes", styleSheet=lbl), self.notes_input)
 
         layout.addLayout(form)
 
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setFixedHeight(38)
         cancel_btn.clicked.connect(self.reject)
         cancel_btn.setStyleSheet("border:1px solid #ddd; border-radius:6px; color:#666;")
-        self.create_btn = QPushButton("✅  Create Job & Deduct Stock")
+        
+        self.create_btn = QPushButton("✅ Create Job & Deduct Stock")
         self.create_btn.setFixedHeight(38)
-        self.create_btn.setDefault(True)
-        self.create_btn.setStyleSheet(
-            "background:#16a34a; color:white; border:none; border-radius:6px; font-weight:600;"
-        )
+        self.create_btn.setStyleSheet("background:#16a34a; color:white; border-radius:6px; font-weight:bold;")
         self.create_btn.clicked.connect(self._save)
+        
         btn_row.addWidget(cancel_btn)
         btn_row.addWidget(self.create_btn)
         layout.addLayout(btn_row)
 
+    def _on_battery_type_changed(self):
+        """Populates Power Specs based on selected Battery Type."""
+        self.power_combo.clear()
+        self.power_combo.addItem("-- Select Power Spec --", "")
+        
+        selected_type = self.battery_type_combo.currentText()
+        if selected_type == "-- Select Battery Type --": return
+            
+        for b in self.master_batteries:
+            if b["battery_type"] == selected_type:
+                self.power_combo.addItem(b["power_spec"], b["power_spec"])
+
     def _save(self):
-        if not self.variant_combo.currentData():
-            QMessageBox.warning(self, "Missing", "Please select a variant.")
-            return
+        model_id = self.model_combo.currentData()
+        color = self.color_combo.currentText()
+        battery = self.battery_type_combo.currentText()
+        power = self.power_combo.currentText()
+
+        if not model_id: return QMessageBox.warning(self, "Missing", "Please select a model.")
+        if color == "-- Select Colour --": return QMessageBox.warning(self, "Missing", "Please select a colour.")
+        if battery == "-- Select Battery Type --": return QMessageBox.warning(self, "Missing", "Please select a battery.")
+        if power == "-- Select Power Spec --": return QMessageBox.warning(self, "Missing", "Please select a power spec.")
+
         self.result_data = {
-            "variant_id":  self.variant_combo.currentData(),
-            "quantity":    self.qty_spin.value(),
-            "location_id": self.location_combo.currentData() or None,
-            "notes":       self.notes_input.toPlainText().strip() or None,
+            "model_id":     model_id,
+            "color":        color,
+            "battery_type": battery,
+            "power_spec":   power,
+            "quantity":     self.qty_spin.value(),
+            "location_id":  self.location_combo.currentData() or None,
+            "notes":        self.notes_input.toPlainText().strip() or None,
         }
         self.accept()
 
@@ -401,18 +444,19 @@ class BOMTab(QWidget):
         right_layout.addWidget(self.total_parts_lbl)
 
         self.bom_table = QTableWidget()
-        self.bom_table.setColumnCount(7)
+        self.bom_table.setColumnCount(8)
         self.bom_table.setHorizontalHeaderLabels([
-            "Part Name", "SKU", "Qty/Unit", "Colour Filter", "Power Filter", "Notes", "Actions"
+            "Part Name", "SKU", "Qty/Unit", "Colour Filter", "Battery Filter", "Power Filter", "Notes", "Actions"
         ])
         self.bom_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.bom_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        self.bom_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
         self.bom_table.setColumnWidth(1, 160)
         self.bom_table.setColumnWidth(2, 70)
         self.bom_table.setColumnWidth(3, 90)
         self.bom_table.setColumnWidth(4, 90)
-        self.bom_table.setColumnWidth(5, 120)
-        self.bom_table.setColumnWidth(6, 80)
+        self.bom_table.setColumnWidth(5, 90)
+        self.bom_table.setColumnWidth(6, 120)
+        self.bom_table.setColumnWidth(7, 80)
         self.bom_table.verticalHeader().setDefaultSectionSize(38)
         self.bom_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.bom_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -488,13 +532,19 @@ class BOMTab(QWidget):
             colour_cell.setForeground(QColor("#7c3aed") if colour else QColor("#94a3b8"))
             self.bom_table.setItem(row, 3, colour_cell)
 
+            battery = item.get("battery_type") or ""
+            battery_cell = QTableWidgetItem(battery if battery else "All batteries")
+            battery_cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+            battery_cell.setForeground(QColor("#059669") if battery else QColor("#94a3b8"))
+            self.bom_table.setItem(row, 4, battery_cell)
+
             power = item.get("power_spec") or ""
-            power_cell = QTableWidgetItem(power if power else "All variants")
+            power_cell = QTableWidgetItem(power if power else "All specs")
             power_cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
             power_cell.setForeground(QColor("#0891b2") if power else QColor("#94a3b8"))
-            self.bom_table.setItem(row, 4, power_cell)
+            self.bom_table.setItem(row, 5, power_cell)
 
-            self.bom_table.setItem(row, 5, cell(item.get("notes", "")))
+            self.bom_table.setItem(row, 6, cell(item.get("notes", "")))
 
             if Session.role in ["superadmin", "manager"]:
                 del_btn = QPushButton("🗑️")
@@ -509,7 +559,7 @@ class BOMTab(QWidget):
                 wl = QHBoxLayout(w)
                 wl.setContentsMargins(4, 3, 4, 3)
                 wl.addWidget(del_btn)
-                self.bom_table.setCellWidget(row, 6, w)
+                self.bom_table.setCellWidget(row, 7, w)
 
         self.total_parts_lbl.setText(f"📋 {len(items)} parts in BOM")
         self.bom_status.setText(f"{len(items)} BOM items for {self.current_model['model_name']}")
@@ -517,12 +567,11 @@ class BOMTab(QWidget):
     def _add_bom_item(self):
         if not self.current_model:
             return
-        # ── FIX: pass model_code so dialog can generate SKU preview ──
         dlg = AddBOMItemDialog(
             self,
             self.current_model["id"],
             self.current_model["model_name"],
-            self.current_model.get("model_code", ""),  # ← model_code
+            self.current_model.get("model_code", ""),
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             try:
@@ -549,16 +598,15 @@ class BOMTab(QWidget):
 
 # ── JOBS TAB ──────────────────────────────────────────────────
 
-
-# ── JOBS TAB ──────────────────────────────────────────────────
-
 class JobsTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.workers   = []
-        self.jobs      = []
-        self.variants  = []
-        self.locations = []
+        self.workers          = []
+        self.jobs             = []
+        self.models           = []
+        self.master_colors    = []
+        self.master_batteries = []
+        self.locations        = []
         self._build_ui()
         self._load_jobs()
 
@@ -608,21 +656,22 @@ class JobsTab(QWidget):
         layout.addLayout(hdr)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(9)
+        self.table.setColumnCount(10)
         self.table.setHorizontalHeaderLabels([
-            "Model", "Colour", "Power Spec", "Qty",
+            "Model", "Colour", "Battery", "Power Spec", "Qty",
             "Location", "Status", "Created", "Units Done", "Actions"
         ])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(8, QHeaderView.ResizeMode.Fixed)
+        self.table.horizontalHeader().setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(1, 80)
-        self.table.setColumnWidth(2, 80)
-        self.table.setColumnWidth(3, 50)
-        self.table.setColumnWidth(4, 110)
-        self.table.setColumnWidth(5, 100)
-        self.table.setColumnWidth(6, 110)
-        self.table.setColumnWidth(7, 80)
-        self.table.setColumnWidth(8, 110)
+        self.table.setColumnWidth(2, 90)
+        self.table.setColumnWidth(3, 80)
+        self.table.setColumnWidth(4, 50)
+        self.table.setColumnWidth(5, 110)
+        self.table.setColumnWidth(6, 100)
+        self.table.setColumnWidth(7, 110)
+        self.table.setColumnWidth(8, 80)
+        self.table.setColumnWidth(9, 110)
         self.table.verticalHeader().setDefaultSectionSize(42)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -684,20 +733,21 @@ class JobsTab(QWidget):
         for row, job in enumerate(jobs):
             self.table.setItem(row, 0, cell(job.get("model_name", "")))
             self.table.setItem(row, 1, cell(job.get("color", "")))
-            self.table.setItem(row, 2, cell(job.get("power_spec", "") or "—"))
-            self.table.setItem(row, 3, cell(job.get("quantity", ""), Qt.AlignmentFlag.AlignCenter))
-            self.table.setItem(row, 4, cell(job.get("location_name", "") or "—"))
+            self.table.setItem(row, 2, cell(job.get("battery_type", "")))
+            self.table.setItem(row, 3, cell(job.get("power_spec", "") or "—"))
+            self.table.setItem(row, 4, cell(job.get("quantity", ""), Qt.AlignmentFlag.AlignCenter))
+            self.table.setItem(row, 5, cell(job.get("location_name", "") or "—"))
 
             status = job.get("status", "pending")
             label, color = STATUS_STYLE.get(status, (status, "#374151"))
             status_cell = QTableWidgetItem(label)
             status_cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
             status_cell.setForeground(QColor(color))
-            self.table.setItem(row, 5, status_cell)
+            self.table.setItem(row, 6, status_cell)
 
-            self.table.setItem(row, 6, cell(job.get("created_at", "") or "—"))
+            self.table.setItem(row, 7, cell(job.get("created_at", "") or "—"))
             self.table.setItem(
-                row, 7,
+                row, 8,
                 cell(
                     f"{job.get('units_created', 0)} / {job.get('quantity', 0)}",
                     Qt.AlignmentFlag.AlignCenter
@@ -722,7 +772,7 @@ class JobsTab(QWidget):
             btn_layout = QHBoxLayout(btn_widget)
             btn_layout.setContentsMargins(4, 2, 4, 2)
             btn_layout.addWidget(actions_btn)
-            self.table.setCellWidget(row, 8, btn_widget)
+            self.table.setCellWidget(row, 9, btn_widget)
 
         self.status_label.setText(f"{len(jobs)} jobs loaded")
 
@@ -776,8 +826,11 @@ class JobsTab(QWidget):
 
     def _create_job(self):
         try:
-            self.variants  = APIClient.get("/master/variants")
-            self.locations = APIClient.get("/master/locations")
+            # 1. Fetch models, colors, batteries, and locations
+            self.models           = APIClient.get("/master/models") 
+            self.master_colors    = APIClient.get("/master/colors")
+            self.master_batteries = APIClient.get("/master/batteries")
+            self.locations        = APIClient.get("/master/locations")
         except APIError as e:
             QMessageBox.critical(self, "Error", str(e.message))
             return
@@ -785,14 +838,16 @@ class JobsTab(QWidget):
             QMessageBox.critical(self, "Error", str(e))
             return
 
-        if not self.variants:
+        if not self.models:
             QMessageBox.warning(
-                self, "No Variants",
-                "No scooter variants found.\nPlease add variants in Master Data → Variants first."
+                self, "No Models",
+                "No scooter models found.\nPlease add models in Master Data first."
             )
             return
 
-        dlg = CreateJobDialog(self, self.variants, self.locations)
+        # 2. Pass master data into the dialog correctly
+        dlg = CreateJobDialog(self, self.models, self.master_colors, self.master_batteries, self.locations)
+        
         if dlg.exec() == QDialog.DialogCode.Accepted:
             try:
                 APIClient.post("/manufacturing/jobs", dlg.result_data)
@@ -866,6 +921,9 @@ class JobsTab(QWidget):
                 self._refresh_summary()
             except APIError as e:
                 QMessageBox.critical(self, "Error", e.message)
+
+
+# ── MAIN MANUFACTURING SCREEN ─────────────────────────────────
 
 class ManufacturingScreen(QWidget):
     def __init__(self, parent=None):

@@ -34,15 +34,15 @@ class PDIResult(str, enum.Enum):
     rework  = "rework"
 
 class StockMovementType(str, enum.Enum):
-    received          = "received"
-    consumed          = "consumed"
-    defective         = "defective"
-    damaged           = "damaged"
-    scrapped          = "scrapped"
-    transferred       = "transferred"
-    adjusted          = "adjusted"
-    returned          = "returned"
-    correction_remove = "correction_remove"   # ← Bug 2 fix: quantity correction removal
+    received            = "received"
+    consumed            = "consumed"
+    defective           = "defective"
+    damaged             = "damaged"
+    scrapped            = "scrapped"
+    transferred         = "transferred"
+    adjusted            = "adjusted"
+    returned            = "returned"
+    correction_remove   = "correction_remove"
 
 class TransferStatus(str, enum.Enum):
     pending    = "pending"
@@ -86,7 +86,7 @@ class User(Base):
     updated_at      = Column(DateTime(timezone=True), onupdate=func.now())
 
 
-# ── SCOOTER MODELS & VARIANTS ─────────────────────────────────
+# ── MASTER DATA (MODELS, COLORS, BATTERIES) ───────────────────
 
 class ScooterModel(Base):
     __tablename__ = "scooter_models"
@@ -98,23 +98,22 @@ class ScooterModel(Base):
     is_active   = Column(Boolean, default=True)
     created_at  = Column(DateTime(timezone=True), server_default=func.now())
 
-    variants  = relationship("ScooterVariant", back_populates="model")
     bom_items = relationship("BOMItem", back_populates="model")
 
 
-class ScooterVariant(Base):
-    __tablename__ = "scooter_variants"
+class MasterColor(Base):
+    __tablename__ = "master_colors"
+
+    id   = Column(String, primary_key=True, default=gen_uuid)
+    name = Column(String, unique=True, nullable=False)
+
+
+class MasterBattery(Base):
+    __tablename__ = "master_batteries"
 
     id           = Column(String, primary_key=True, default=gen_uuid)
-    model_id     = Column(String, ForeignKey("scooter_models.id"), nullable=False)
-    color        = Column(String(50), nullable=False)
-    battery_type = Column(String(50), nullable=False)
-    power_spec   = Column(String(50))
-    variant_code = Column(String(50), unique=True, nullable=False)
-    is_active    = Column(Boolean, default=True)
-
-    model         = relationship("ScooterModel", back_populates="variants")
-    scooter_units = relationship("ScooterUnit", back_populates="variant")
+    battery_type = Column(String, nullable=False) # e.g., "Lithium Ion" or "Lead Acid"
+    power_spec   = Column(String, nullable=False) # e.g., "72V 30Ah"
 
 
 # ── LOCATIONS ─────────────────────────────────────────────────
@@ -195,15 +194,16 @@ class StockMovement(Base):
 class BOMItem(Base):
     __tablename__ = "bom_items"
 
-    id                = Column(String, primary_key=True, default=gen_uuid)
-    model_id          = Column(String, ForeignKey("scooter_models.id"), nullable=False)
-    part_name         = Column(String(150), nullable=True)
-    sku               = Column(String(80), nullable=True)
-    inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=True)
-    quantity_required = Column(Integer, nullable=False)
-    colour            = Column(String(50), nullable=True)
-    power_spec        = Column(String(50), nullable=True)
-    notes             = Column(Text)
+    id                  = Column(String, primary_key=True, default=gen_uuid)
+    model_id            = Column(String, ForeignKey("scooter_models.id"), nullable=False)
+    part_name           = Column(String(150), nullable=True)
+    sku                 = Column(String(80), nullable=True)
+    inventory_item_id   = Column(String, ForeignKey("inventory_items.id"), nullable=True)
+    quantity_required   = Column(Integer, nullable=False)
+    colour              = Column(String(50), nullable=True)
+    battery_type        = Column(String(50), nullable=True)
+    power_spec          = Column(String(50), nullable=True)
+    notes               = Column(Text)
 
     model          = relationship("ScooterModel", back_populates="bom_items")
     inventory_item = relationship("InventoryItem", back_populates="bom_items")
@@ -214,7 +214,11 @@ class AssemblyJob(Base):
     __tablename__ = "assembly_jobs"
 
     id           = Column(String, primary_key=True, default=gen_uuid)
-    variant_id   = Column(String, ForeignKey("scooter_variants.id"), nullable=False)
+    model_id     = Column(String, ForeignKey("scooter_models.id"), nullable=False)
+    color        = Column(String(50), nullable=True)
+    battery_type = Column(String(50), nullable=True)
+    power_spec   = Column(String(50), nullable=True)
+    
     quantity     = Column(Integer, nullable=False)
     location_id  = Column(String, ForeignKey("locations.id"))
     status       = Column(Enum(AssemblyStatus), default=AssemblyStatus.pending)
@@ -224,6 +228,7 @@ class AssemblyJob(Base):
     notes        = Column(Text)
     created_at   = Column(DateTime(timezone=True), server_default=func.now())
 
+    model         = relationship("ScooterModel")
     scooter_units = relationship("ScooterUnit", back_populates="assembly_job")
 
 
@@ -232,20 +237,26 @@ class AssemblyJob(Base):
 class ScooterUnit(Base):
     __tablename__ = "scooter_units"
 
-    id                  = Column(String, primary_key=True, default=gen_uuid)
-    serial_number       = Column(String(100), unique=True, nullable=False, index=True)
-    chassis_number      = Column(String(100), unique=True)
-    variant_id          = Column(String, ForeignKey("scooter_variants.id"), nullable=False)
-    assembly_job_id     = Column(String, ForeignKey("assembly_jobs.id"))
-    current_location_id = Column(String, ForeignKey("locations.id"))
-    current_dealer_id   = Column(String, ForeignKey("dealers.id"), nullable=True)
-    status              = Column(Enum(VehicleStatus), default=VehicleStatus.manufacturing_pending)
-    manufactured_date   = Column(Date)
-    delivered_date      = Column(Date)
-    created_at          = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at          = Column(DateTime(timezone=True), onupdate=func.now())
+    id                    = Column(String, primary_key=True, default=gen_uuid)
+    serial_number         = Column(String(100), unique=True, nullable=False, index=True)
+    chassis_number        = Column(String(100), unique=True, nullable=True)
+    pdi_number            = Column(String(50), nullable=True) # Added field
+    
+    model_id              = Column(String, ForeignKey("scooter_models.id"), nullable=False)
+    color                 = Column(String(50), nullable=True)
+    battery_type          = Column(String(50), nullable=True)
+    power_spec            = Column(String(50), nullable=True)
 
-    variant      = relationship("ScooterVariant", back_populates="scooter_units")
+    assembly_job_id       = Column(String, ForeignKey("assembly_jobs.id"))
+    current_location_id   = Column(String, ForeignKey("locations.id"))
+    current_dealer_id     = Column(String, ForeignKey("dealers.id"), nullable=True)
+    status                = Column(Enum(VehicleStatus), default=VehicleStatus.manufacturing_pending)
+    manufactured_date     = Column(Date)
+    delivered_date        = Column(Date)
+    created_at            = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at            = Column(DateTime(timezone=True), onupdate=func.now())
+
+    model        = relationship("ScooterModel")
     assembly_job = relationship("AssemblyJob", back_populates="scooter_units")
     pdi_records  = relationship("PDIRecord", back_populates="scooter_unit")
 
@@ -255,16 +266,16 @@ class ScooterUnit(Base):
 class PDIRecord(Base):
     __tablename__ = "pdi_records"
 
-    id              = Column(String, primary_key=True, default=gen_uuid)
-    scooter_unit_id = Column(String, ForeignKey("scooter_units.id"), nullable=False)
-    inspector_id    = Column(String, ForeignKey("users.id"))
-    result          = Column(Enum(PDIResult), nullable=True)
-    remarks         = Column(Text)
-    failure_reason  = Column(Text)
-    rework_notes    = Column(Text)
-    started_at      = Column(DateTime(timezone=True))
-    completed_at    = Column(DateTime(timezone=True))
-    created_at      = Column(DateTime(timezone=True), server_default=func.now())
+    id                = Column(String, primary_key=True, default=gen_uuid)
+    scooter_unit_id   = Column(String, ForeignKey("scooter_units.id"), nullable=False)
+    inspector_id      = Column(String, ForeignKey("users.id"))
+    result            = Column(Enum(PDIResult), nullable=True)
+    remarks           = Column(Text)
+    failure_reason    = Column(Text)
+    rework_notes      = Column(Text)
+    started_at        = Column(DateTime(timezone=True))
+    completed_at      = Column(DateTime(timezone=True))
+    created_at        = Column(DateTime(timezone=True), server_default=func.now())
 
     scooter_unit = relationship("ScooterUnit", back_populates="pdi_records")
 
@@ -274,14 +285,14 @@ class PDIRecord(Base):
 class Supplier(Base):
     __tablename__ = "suppliers"
 
-    id            = Column(String, primary_key=True, default=gen_uuid)
-    name          = Column(String(150), nullable=False)
-    country       = Column(String(50), default="China")
-    contact_name  = Column(String(100))
-    contact_email = Column(String(100))
-    contact_phone = Column(String(30))
-    is_active     = Column(Boolean, default=True)
-    created_at    = Column(DateTime(timezone=True), server_default=func.now())
+    id              = Column(String, primary_key=True, default=gen_uuid)
+    name            = Column(String(150), nullable=False)
+    country         = Column(String(50), default="China")
+    contact_name    = Column(String(100))
+    contact_email   = Column(String(100))
+    contact_phone   = Column(String(30))
+    is_active       = Column(Boolean, default=True)
+    created_at      = Column(DateTime(timezone=True), server_default=func.now())
 
     shipments = relationship("Shipment", back_populates="supplier")
 
@@ -289,16 +300,16 @@ class Supplier(Base):
 class Shipment(Base):
     __tablename__ = "shipments"
 
-    id               = Column(String, primary_key=True, default=gen_uuid)
-    shipment_code    = Column(String(50), unique=True, nullable=False)
-    supplier_id      = Column(String, ForeignKey("suppliers.id"))
-    container_number = Column(String(50))
-    expected_arrival = Column(Date)
-    actual_arrival   = Column(Date)
-    status           = Column(Enum(ShipmentStatus), default=ShipmentStatus.pending)
-    notes            = Column(Text)
-    received_by      = Column(String, ForeignKey("users.id"))
-    created_at       = Column(DateTime(timezone=True), server_default=func.now())
+    id                 = Column(String, primary_key=True, default=gen_uuid)
+    shipment_code      = Column(String(50), unique=True, nullable=False)
+    supplier_id        = Column(String, ForeignKey("suppliers.id"))
+    container_number   = Column(String(50))
+    expected_arrival   = Column(Date)
+    actual_arrival     = Column(Date)
+    status             = Column(Enum(ShipmentStatus), default=ShipmentStatus.pending)
+    notes              = Column(Text)
+    received_by        = Column(String, ForeignKey("users.id"))
+    created_at         = Column(DateTime(timezone=True), server_default=func.now())
 
     supplier = relationship("Supplier", back_populates="shipments")
     items    = relationship("ShipmentItem", back_populates="shipment")
@@ -307,14 +318,14 @@ class Shipment(Base):
 class ShipmentItem(Base):
     __tablename__ = "shipment_items"
 
-    id                = Column(String, primary_key=True, default=gen_uuid)
-    shipment_id       = Column(String, ForeignKey("shipments.id"), nullable=False)
-    inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=False)
-    expected_quantity = Column(Integer, nullable=False)
-    received_quantity = Column(Integer, default=0)
-    damaged_quantity  = Column(Integer, default=0)
-    shortage_quantity = Column(Integer, default=0)
-    notes             = Column(Text)
+    id                  = Column(String, primary_key=True, default=gen_uuid)
+    shipment_id         = Column(String, ForeignKey("shipments.id"), nullable=False)
+    inventory_item_id   = Column(String, ForeignKey("inventory_items.id"), nullable=False)
+    expected_quantity   = Column(Integer, nullable=False)
+    received_quantity   = Column(Integer, default=0)
+    damaged_quantity    = Column(Integer, default=0)
+    shortage_quantity   = Column(Integer, default=0)
+    notes               = Column(Text)
 
     shipment = relationship("Shipment", back_populates="items")
 
@@ -342,15 +353,15 @@ class Dealer(Base):
 class StockTransfer(Base):
     __tablename__ = "stock_transfers"
 
-    id               = Column(String, primary_key=True, default=gen_uuid)
-    from_location_id = Column(String, ForeignKey("locations.id"), nullable=False)
-    to_location_id   = Column(String, ForeignKey("locations.id"), nullable=False)
-    transfer_type    = Column(String(30))
-    status           = Column(Enum(TransferStatus), default=TransferStatus.pending)
-    notes            = Column(Text)
-    initiated_by     = Column(String, ForeignKey("users.id"))
-    completed_at     = Column(DateTime(timezone=True))
-    created_at       = Column(DateTime(timezone=True), server_default=func.now())
+    id                 = Column(String, primary_key=True, default=gen_uuid)
+    from_location_id   = Column(String, ForeignKey("locations.id"), nullable=False)
+    to_location_id     = Column(String, ForeignKey("locations.id"), nullable=False)
+    transfer_type      = Column(String(30))
+    status             = Column(Enum(TransferStatus), default=TransferStatus.pending)
+    notes              = Column(Text)
+    initiated_by       = Column(String, ForeignKey("users.id"))
+    completed_at       = Column(DateTime(timezone=True))
+    created_at         = Column(DateTime(timezone=True), server_default=func.now())
 
     items = relationship("StockTransferItem", back_populates="transfer")
 
@@ -358,11 +369,11 @@ class StockTransfer(Base):
 class StockTransferItem(Base):
     __tablename__ = "stock_transfer_items"
 
-    id                = Column(String, primary_key=True, default=gen_uuid)
-    transfer_id       = Column(String, ForeignKey("stock_transfers.id"), nullable=False)
-    inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=True)
-    scooter_unit_id   = Column(String, ForeignKey("scooter_units.id"), nullable=True)
-    quantity          = Column(Integer, default=1)
+    id                  = Column(String, primary_key=True, default=gen_uuid)
+    transfer_id         = Column(String, ForeignKey("stock_transfers.id"), nullable=False)
+    inventory_item_id   = Column(String, ForeignKey("inventory_items.id"), nullable=True)
+    scooter_unit_id     = Column(String, ForeignKey("scooter_units.id"), nullable=True)
+    quantity            = Column(Integer, default=1)
 
     transfer = relationship("StockTransfer", back_populates="items")
 
@@ -372,16 +383,16 @@ class StockTransferItem(Base):
 class DamageRecord(Base):
     __tablename__ = "damage_records"
 
-    id                = Column(String, primary_key=True, default=gen_uuid)
-    stage             = Column(Enum(DamageStage), nullable=False)
-    inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=True)
-    scooter_unit_id   = Column(String, ForeignKey("scooter_units.id"), nullable=True)
-    quantity          = Column(Integer, default=1)
-    root_cause        = Column(Text)
-    corrective_action = Column(Text)
-    financial_impact  = Column(Float, default=0.0)
-    reported_by       = Column(String, ForeignKey("users.id"))
-    created_at        = Column(DateTime(timezone=True), server_default=func.now())
+    id                  = Column(String, primary_key=True, default=gen_uuid)
+    stage               = Column(Enum(DamageStage), nullable=False)
+    inventory_item_id   = Column(String, ForeignKey("inventory_items.id"), nullable=True)
+    scooter_unit_id     = Column(String, ForeignKey("scooter_units.id"), nullable=True)
+    quantity            = Column(Integer, default=1)
+    root_cause          = Column(Text)
+    corrective_action   = Column(Text)
+    financial_impact    = Column(Float, default=0.0)
+    reported_by         = Column(String, ForeignKey("users.id"))
+    created_at          = Column(DateTime(timezone=True), server_default=func.now())
 
 
 # ── AUDIT LOG ─────────────────────────────────────────────────
