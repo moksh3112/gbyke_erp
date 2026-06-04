@@ -10,7 +10,6 @@
 ### Step 1 — Make your changes on your dev laptop
 ### Step 2 — Bump the version number
 - Edit `version.py` → change VERSION = "1.0.1" (or whatever)
-- Edit `app/main.py` → change version in the /version endpoint to match
 
 ### Step 3 — Push to GitHub
 git add .
