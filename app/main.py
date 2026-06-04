@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.database import Base, engine, test_connection
-from app.routers import auth, inventory, models, users, manufacturing, pdi
+from app.routers import auth, inventory, models, users, manufacturing, pdi, warehouses 
 import app.models
 
 # ── Single source of truth ────────────────────────────────────────────────────
@@ -39,6 +39,7 @@ app.include_router(models.router)
 app.include_router(users.router)
 app.include_router(manufacturing.router)
 app.include_router(pdi.router)
+app.include_router(warehouses.router) 
 
 
 @app.get("/")

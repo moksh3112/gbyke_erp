@@ -135,14 +135,10 @@ class MainWindow(QMainWindow):
         elif screen == "pdi":
             from desktop.screens.pdi import PDIScreen
             widget = PDIScreen()
-
-        # ── FIX 14: Named stubs for unbuilt modules ────────────
         elif screen == "warehouses":
-            widget = _coming_soon_screen(
-                "🏢", "Warehouse Management",
-                "Track finished scooter inventory across all godowns.\n"
-                "Transfer stock between locations and manage space allocation."
-            )
+            from desktop.screens.warehouses import WarehousesScreen
+            widget = WarehousesScreen()
+
         elif screen == "dealers":
             widget = _coming_soon_screen(
                 "🚚", "Dealer Management",

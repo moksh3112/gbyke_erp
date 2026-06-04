@@ -111,13 +111,13 @@ class Sidebar(QWidget):
         ]
         # Manager and above
         manager_items = [
-            ("⚙️",  "Master Data",   "models"),
             ("🏢", "Warehouses",     "warehouses"),
             ("🚚", "Dealers",        "dealers"),
             ("📥", "Shipments",      "shipments"),
             ("🔧", "Spare Parts",    "spare_parts"),
             ("⚠️",  "Damage Log",    "damage"),
             ("📊", "Reports",        "reports"),
+            ("⚙️",  "Master Data",   "models"),
 ]
         # Super admin only
         superadmin_items = [
