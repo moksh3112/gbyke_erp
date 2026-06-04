@@ -192,19 +192,21 @@ class StockMovement(Base):
 
 
 # ── BILL OF MATERIALS ─────────────────────────────────────────
-
 class BOMItem(Base):
     __tablename__ = "bom_items"
 
     id                = Column(String, primary_key=True, default=gen_uuid)
     model_id          = Column(String, ForeignKey("scooter_models.id"), nullable=False)
-    inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=False)
+    part_name         = Column(String(150), nullable=True)
+    sku               = Column(String(80), nullable=True)
+    inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=True)
     quantity_required = Column(Integer, nullable=False)
+    colour            = Column(String(50), nullable=True)
+    power_spec        = Column(String(50), nullable=True)
     notes             = Column(Text)
 
     model          = relationship("ScooterModel", back_populates="bom_items")
     inventory_item = relationship("InventoryItem", back_populates="bom_items")
-
 
 # ── ASSEMBLY JOBS ─────────────────────────────────────────────
 

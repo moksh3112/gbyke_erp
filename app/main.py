@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.database import Base, engine, test_connection
-from app.routers import auth, inventory, models, users
+from app.routers import auth, inventory, models, users, manufacturing
 import app.models
 
 @asynccontextmanager
@@ -21,6 +21,8 @@ app.include_router(auth.router)
 app.include_router(inventory.router)
 app.include_router(models.router)
 app.include_router(users.router)
+app.include_router(manufacturing.router)
+
 
 @app.get("/")
 def root():

@@ -99,6 +99,9 @@ class MainWindow(QMainWindow):
         if screen == "inventory":
             from desktop.screens.inventory import InventoryScreen
             widget = InventoryScreen()
+        elif screen == "manufacturing":
+            from desktop.screens.manufacturing import ManufacturingScreen
+            widget = ManufacturingScreen()
         elif screen == "models":
             from desktop.screens.models import MasterDataScreen
             widget = MasterDataScreen()

@@ -43,6 +43,7 @@ class InventoryItemUpdate(BaseModel):
     model_name:          Optional[str]   = None
     colour:              str             = _COLOUR_UNSET   # sentinel: __COLOUR_UNSET__ means "not touched", "" means "clear it"
     location_id:         Optional[str]   = None
+    sku:                 Optional[str]   = None
 
 
 class InventoryItemResponse(BaseModel):

@@ -106,11 +106,11 @@ class Sidebar(QWidget):
     # Available to all roles
         common = [
             ("📦", "Inventory",     "inventory"),
+            ("🏭", "Manufacturing",  "manufacturing"),
             ("🛵", "PDI",           "pdi"),
         ]
         # Manager and above
         manager_items = [
-            ("🏭", "Manufacturing",  "manufacturing"),
             ("⚙️",  "Master Data",   "models"),
             ("🏢", "Warehouses",     "warehouses"),
             ("🚚", "Dealers",        "dealers"),

@@ -123,9 +123,9 @@ def get_items(
         )
     if search:
         query = query.filter(
-            InventoryItem.item_name.ilike(f"%{search}%") |
-            InventoryItem.sku.ilike(f"%{search}%") |
-            InventoryItem.model_name.ilike(f"%{search}%")
+            InventoryItem.item_name.ilike(f"%{search}%") |   
+            InventoryItem.sku.ilike(f"{search}%") |          
+            InventoryItem.model_name.ilike(f"{search}%")     
         )
     items = query.order_by(
         InventoryItem.model_name,
@@ -320,7 +320,8 @@ def update_item(
     if data.location_id is not None: item.location_id = data.location_id or None
     if data.unit_cost is not None and can_see_financials(current_user):
         item.unit_cost = data.unit_cost
-
+    if data.sku is not None:
+        item.sku = data.sku
     db.commit()
     db.refresh(item)
     return _item_to_response(item, current_user)
@@ -621,7 +622,7 @@ def get_summary(
             if i.remaining_quantity <= i.low_stock_threshold
         ),
         "total_consumed":  sum(i.consumed_quantity  for i in items),
-        "total_defective": sum(i.defective_quantity for i in items),
+        "total_defective": sum((i.defective_quantity + i.damaged_quantity) for i in items),
     }
 
     if can_see_financials(current_user):
