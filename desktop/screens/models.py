@@ -106,7 +106,9 @@ class AddModelDialog(QDialog):
         self.desc_input = QTextEdit()
         self.desc_input.setFixedHeight(70)
         self.desc_input.setPlaceholderText("Optional description...")
-        self.desc_input.setStyleSheet("color:#1a1a1a;")
+        self.desc_input.setStyleSheet(
+            "color:#1a1a1a; background:white; border:1px solid #ddd; border-radius:4px;"
+        )
         form.addRow(QLabel("Description", styleSheet=lbl), self.desc_input)
 
         layout.addLayout(form)
@@ -330,7 +332,9 @@ class AddLocationDialog(QDialog):
         self.address_input = QTextEdit()
         self.address_input.setFixedHeight(60)
         self.address_input.setPlaceholderText("Full address (optional)...")
-        self.address_input.setStyleSheet("color:#1a1a1a;")
+        self.address_input.setStyleSheet(
+            "color:#1a1a1a; background:white; border:1px solid #ddd; border-radius:4px;"
+        )
         form.addRow(QLabel("Address", styleSheet=lbl), self.address_input)
 
         layout.addLayout(form)

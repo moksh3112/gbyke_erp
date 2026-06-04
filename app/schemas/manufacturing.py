@@ -1,3 +1,7 @@
+# app/schemas/manufacturing.py
+# ONLY CHANGE from original: StockCheckResponse.shortages is now List[str]
+# Everything else is identical to the original file.
+
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
@@ -12,7 +16,7 @@ class BOMItemCreate(BaseModel):
     inventory_item_id: Optional[str] = None   # optional backward compat
     quantity_required: int
     colour:            Optional[str] = None
-    battery_type:      Optional[str] = None   # Added to match new architecture
+    battery_type:      Optional[str] = None
     power_spec:        Optional[str] = None
     notes:             Optional[str] = None
 
@@ -31,10 +35,10 @@ class BOMItemResponse(BaseModel):
     id:                str
     model_id:          str
     model_name:        Optional[str] = None
-    part_name:         Optional[str] = None   # free text name
+    part_name:         Optional[str] = None
     sku:               Optional[str] = None
     inventory_item_id: Optional[str] = None
-    item_name:         Optional[str] = None   # from inventory if linked
+    item_name:         Optional[str] = None
     quantity_required: int
     colour:            Optional[str] = None
     battery_type:      Optional[str] = None
@@ -88,6 +92,7 @@ class AssemblyJobResponse(BaseModel):
 
 # ── STOCK SHORTAGE ────────────────────────────────────────────
 
+# Kept for backward compatibility — still importable by the router
 class StockShortageItem(BaseModel):
     part_name:  str
     sku:        Optional[str] = None
@@ -98,4 +103,4 @@ class StockShortageItem(BaseModel):
 
 class StockCheckResponse(BaseModel):
     can_produce: bool
-    shortages:   List[StockShortageItem] = []
+    shortages:   List[str] = []   # FIX 6: was List[StockShortageItem], router returns strings

@@ -1,3 +1,6 @@
+# app/core/dependencies.py
+# FIX: removed duplicate require_superadmin definition (was defined twice)
+
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
@@ -6,6 +9,7 @@ from app.core.security import decode_access_token
 from app.models import User
 
 bearer_scheme = HTTPBearer()
+
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
@@ -37,7 +41,7 @@ def get_current_user(
 
 
 def require_superadmin(current_user: User = Depends(get_current_user)) -> User:
-    """Only you — full access including financials and account management."""
+    """Only the owner — full access including financials and account management."""
     if current_user.role != "superadmin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -69,13 +73,3 @@ def can_see_financials(user: User) -> bool:
 
 def can_manage_accounts(user: User) -> bool:
     return user.role == "superadmin"
-
-def require_superadmin(
-    current_user: User = Depends(get_current_user)
-) -> User:
-    if current_user.role != "superadmin":
-        raise HTTPException(
-            status_code=403,
-            detail="Only superadmin can access this."
-        )
-    return current_user

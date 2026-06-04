@@ -154,7 +154,9 @@ class AddBOMItemDialog(QDialog):
         self.notes_input = QTextEdit()
         self.notes_input.setFixedHeight(50)
         self.notes_input.setPlaceholderText("Optional notes...")
-        self.notes_input.setStyleSheet("color:#1a1a1a;")
+        self.notes_input.setStyleSheet(
+            "color:#1a1a1a; background:white; border:1px solid #ddd; border-radius:4px;"
+        )
         notl = QLabel("Notes"); notl.setStyleSheet(lbl)
         form.addRow(notl, self.notes_input)
 
@@ -313,7 +315,9 @@ class CreateJobDialog(QDialog):
         self.notes_input = QTextEdit()
         self.notes_input.setFixedHeight(60)
         self.notes_input.setPlaceholderText("Optional notes...")
-        self.notes_input.setStyleSheet("border:1px solid #ddd; border-radius:4px; padding:4px; color:#1a1a1a;")
+        self.notes_input.setStyleSheet(
+            "color:#1a1a1a; background:white; border:1px solid #ddd; border-radius:4px; padding:4px;"
+        )
         form.addRow(QLabel("Notes", styleSheet=lbl), self.notes_input)
 
         layout.addLayout(form)

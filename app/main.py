@@ -1,8 +1,23 @@
+# app/main.py
+# FIX 20: VERSION now imported from version.py — never hardcoded here again.
+# To release a new version: change the number ONLY in version.py.
+
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from app.database import Base, engine, test_connection
 from app.routers import auth, inventory, models, users, manufacturing, pdi
 import app.models
+
+# ── Single source of truth ────────────────────────────────────────────────────
+try:
+    from version import VERSION  # FIX 20
+except ImportError:
+    VERSION = "unknown"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -11,10 +26,11 @@ async def lifespan(app: FastAPI):
     print("✓ All tables ready.")
     yield
 
+
 app = FastAPI(
-    title="G-Byke ERP",
-    version="1.0.2",
-    lifespan=lifespan
+    title   = "G-Byke ERP",
+    version = VERSION,           # FIX 20
+    lifespan = lifespan
 )
 
 app.include_router(auth.router)
@@ -27,7 +43,7 @@ app.include_router(pdi.router)
 
 @app.get("/")
 def root():
-    return {"status": "G-Byke ERP server is running", "version": "1.0.2"}
+    return {"status": "G-Byke ERP server is running", "version": VERSION}  # FIX 20
 
 @app.get("/health")
 def health():
@@ -36,7 +52,7 @@ def health():
 @app.get("/version")
 def get_version():
     return {
-        "version":        "1.0.2",
+        "version":        VERSION,   # FIX 20
         "force_update":   False,
         "update_message": ""
     }

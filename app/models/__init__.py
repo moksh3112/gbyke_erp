@@ -97,8 +97,10 @@ class ScooterModel(Base):
     description = Column(Text)
     is_active   = Column(Boolean, default=True)
     created_at  = Column(DateTime(timezone=True), server_default=func.now())
-
-    bom_items = relationship("BOMItem", back_populates="model")
+    bom_items = relationship(
+        "BOMItem", back_populates="model",
+        cascade="all, delete-orphan"
+    )
 
 
 class MasterColor(Base):
@@ -241,7 +243,8 @@ class ScooterUnit(Base):
     serial_number         = Column(String(100), unique=True, nullable=False, index=True)
     chassis_number        = Column(String(100), unique=True, nullable=True)
     pdi_number            = Column(String(50), nullable=True) # Added field
-    
+    motor_number          = Column(String(100), nullable=True)  # dedicated motor/serial field
+    pdi_remarks           = Column(Text,        nullable=True)  # inspector notes
     model_id              = Column(String, ForeignKey("scooter_models.id"), nullable=False)
     color                 = Column(String(50), nullable=True)
     battery_type          = Column(String(50), nullable=True)

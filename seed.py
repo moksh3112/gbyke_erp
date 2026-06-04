@@ -1,6 +1,17 @@
+# seed.py
+# FIX 7: Password is now read from .env — never hardcoded in source code.
+#
+# SETUP: create a .env file in the project root with:
+#   ADMIN_USERNAME=Sahil
+#   ADMIN_PASSWORD=your_secure_password_here
+#   ADMIN_FULL_NAME=G-Byke Owner
+
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from dotenv import load_dotenv
+load_dotenv()
 
 from app.database import SessionLocal
 from app.models import User
@@ -16,18 +27,15 @@ def hash_password(password: str) -> str:
 def update_admin(username: str, password: str, full_name: str):
     db = SessionLocal()
     try:
-        admin = db.query(User).filter(
-            User.role == "superadmin"
-        ).first()
-
+        admin = db.query(User).filter(User.role == "superadmin").first()
         if admin:
-            admin.username         = username
-            admin.hashed_password  = hash_password(password)
-            admin.full_name        = full_name
+            admin.username        = username
+            admin.hashed_password = hash_password(password)
+            admin.full_name       = full_name
             db.commit()
             print(f"✓ Admin updated — username: {username}")
         else:
-            print("✗ No superadmin found in database.")
+            print("✗ No superadmin found. Run reset_db.py first.")
     finally:
         db.close()
 
@@ -35,54 +43,36 @@ def update_admin(username: str, password: str, full_name: str):
 def create_test_accounts():
     db = SessionLocal()
     try:
-        # Manager
-        manager = db.query(User).filter(
-            User.username == "manager1"
-        ).first()
-        if not manager:
-            manager = User(
-                username        = "manager1",
-                hashed_password = hash_password("manager123"),
-                full_name       = "Test Manager",
-                role            = "manager",
-                is_active       = True
-            )
-            db.add(manager)
-            print("✓ manager1 created")
-        else:
-            print("✓ manager1 already exists")
-
-        # Staff
-        staff = db.query(User).filter(
-            User.username == "staff1"
-        ).first()
-        if not staff:
-            staff = User(
-                username        = "staff1",
-                hashed_password = hash_password("staff123"),
-                full_name       = "Test Staff",
-                role            = "staff",
-                is_active       = True
-            )
-            db.add(staff)
-            print("✓ staff1 created")
-        else:
-            print("✓ staff1 already exists")
-
+        for uname, pwd, name, role in [
+            ("manager1", "manager123", "Test Manager", "manager"),
+            ("staff1",   "staff123",   "Test Staff",   "staff"),
+        ]:
+            if not db.query(User).filter(User.username == uname).first():
+                db.add(User(
+                    username        = uname,
+                    hashed_password = hash_password(pwd),
+                    full_name       = name,
+                    role            = role,
+                    is_active       = True
+                ))
+                print(f"✓ {uname} created")
+            else:
+                print(f"✓ {uname} already exists")
         db.commit()
     finally:
         db.close()
 
 
 if __name__ == "__main__":
-    # ── CHANGE YOUR ADMIN CREDENTIALS HERE ────────────────────
-    ADMIN_USERNAME  = "Sahil"
-    ADMIN_PASSWORD  = "Moksh@233234"
-    ADMIN_FULL_NAME = "G-Byke Owner"
-    # ──────────────────────────────────────────────────────────
+    # Read from environment — set these in .env, never hardcode here
+    ADMIN_USERNAME  = os.getenv("ADMIN_USERNAME")
+    ADMIN_PASSWORD  = os.getenv("ADMIN_PASSWORD")
+    ADMIN_FULL_NAME = os.getenv("ADMIN_FULL_NAME", "G-Byke Owner")
+
+    if not ADMIN_USERNAME or not ADMIN_PASSWORD:
+        print("❌  ADMIN_USERNAME and ADMIN_PASSWORD must be set in your .env file.")
+        sys.exit(1)
 
     update_admin(ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_FULL_NAME)
     create_test_accounts()
-    print("\nDone. You can now login with:")
-    print(f"  Username : {ADMIN_USERNAME}")
-    print(f"  Password : {ADMIN_PASSWORD}")
+    print(f"\nDone. Login with username: {ADMIN_USERNAME}")

@@ -363,7 +363,9 @@ class DefectiveForm(QWidget):
         self.notes_input = QTextEdit()
         self.notes_input.setFixedHeight(50)
         self.notes_input.setPlaceholderText("Optional: any additional details...")
-        self.notes_input.setStyleSheet("color:#1a1a1a;")
+        self.notes_input.setStyleSheet(
+            "color:#1a1a1a; background:white; border:1px solid #ddd; border-radius:4px;"
+        )
         n = QLabel("Notes"); n.setStyleSheet(lbl)
         layout.addRow(n, self.notes_input)
 
@@ -580,7 +582,9 @@ class UpdateStockDialog(QDialog):
         self.notes_input = QTextEdit()
         self.notes_input.setFixedHeight(60)
         self.notes_input.setPlaceholderText("Optional notes...")
-        self.notes_input.setStyleSheet("color:#1a1a1a;")
+        self.notes_input.setStyleSheet(
+            "color:#1a1a1a; background:white; border:1px solid #ddd; border-radius:4px;"
+        )
         nl = QLabel("Notes"); nl.setStyleSheet(lbl)
         form.addRow(nl, self.notes_input)
 
@@ -832,10 +836,12 @@ class CorrectQuantityDialog(QDialog):
         self.reason_input = QTextEdit()
         self.reason_input.setFixedHeight(60)
         self.reason_input.setPlaceholderText("e.g. Typed 1 instead of 100 during purchase")
-        self.reason_input.setStyleSheet("color:#1a1a1a;")
+        self.reason_input.setStyleSheet(
+            "color:#1a1a1a; background:white; border:1px solid #ddd; border-radius:4px;"
+        )
         rl = QLabel("Reason *"); rl.setStyleSheet(lbl)
         form.addRow(rl, self.reason_input)
-
+        
         layout.addLayout(form)
 
         btn_row = QHBoxLayout()
@@ -955,11 +961,13 @@ class MoveStockDialog(QDialog):
         self.avail_label.setStyleSheet("color:#6b7280; font-size:11px; font-style:italic;")
         self._update_max(0)
         form.addRow("", self.avail_label)
-
+        
         self.notes_input = QTextEdit()
         self.notes_input.setFixedHeight(60)
         self.notes_input.setPlaceholderText("Optional notes...")
-        self.notes_input.setStyleSheet("color:#1a1a1a;")
+        self.notes_input.setStyleSheet(
+            "color:#1a1a1a; background:white; border:1px solid #ddd; border-radius:4px;"
+        )
         nl = QLabel("Notes"); nl.setStyleSheet(lbl)
         form.addRow(nl, self.notes_input)
 
@@ -967,7 +975,7 @@ class MoveStockDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-
+        
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setFixedHeight(38)
         cancel_btn.clicked.connect(self.reject)

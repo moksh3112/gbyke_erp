@@ -497,12 +497,10 @@ def complete_job(
     db.refresh(job)
     return _job_to_response(job, db)
 
-
-@router.post("/jobs/{job_id}/cancel")
 def cancel_job(
     job_id:       str,
-    db:           Session = Depends(get_db),
-    current_user: User    = Depends(require_manager_or_above)
+    db:           "Session",
+    current_user: "User",
 ):
     job = db.query(AssemblyJob).filter(AssemblyJob.id == job_id).first()
     if not job:
@@ -511,19 +509,21 @@ def cancel_job(
         raise HTTPException(400, "Cannot cancel a completed job.")
     if job.status == AssemblyStatus.cancelled:
         raise HTTPException(400, "Job is already cancelled.")
-
+ 
     bom_items = _get_applicable_bom_items(
         db, job.model_id, job.color, job.battery_type, job.power_spec
     )
-
+ 
     for bom in bom_items:
         inv = _find_inventory_item(db, bom)
         if not inv:
             continue
         returned = bom.quantity_required * job.quantity
-        inv.consumed_quantity  -= returned
+ 
+        # FIX 8: guard against going negative
+        inv.consumed_quantity  = max(0, inv.consumed_quantity - returned)
         inv.remaining_quantity += returned
-
+ 
         if job.location_id:
             loc_stock = db.query(InventoryLocationStock).filter(
                 InventoryLocationStock.item_id     == inv.id,
@@ -531,7 +531,7 @@ def cancel_job(
             ).first()
             if loc_stock:
                 loc_stock.quantity += returned
-
+ 
         movement = StockMovement(
             id             = gen_uuid(),
             item_id        = inv.id,
@@ -544,13 +544,12 @@ def cancel_job(
             performed_by   = current_user.id,
         )
         db.add(movement)
-
+ 
     job.status = AssemblyStatus.cancelled
     db.commit()
     db.refresh(job)
     return _job_to_response(job, db)
-
-
+ 
 # ── SUMMARY ───────────────────────────────────────────────────
 
 @router.get("/summary")
@@ -577,31 +576,29 @@ def get_summary(
         "completed_jobs":     completed_jobs,
         "units_awaiting_pdi": units_mfg_done,
     }
-
-@router.delete("/jobs/{job_id}")
 def delete_job(
     job_id:       str,
-    db:           Session = Depends(get_db),
-    current_user: User    = Depends(require_manager_or_above)
+    db:           "Session",
+    current_user: "User",
 ):
     job = db.query(AssemblyJob).filter(AssemblyJob.id == job_id).first()
     if not job:
         raise HTTPException(404, "Assembly job not found.")
-        
+ 
     if job.status != AssemblyStatus.cancelled:
         bom_items = _get_applicable_bom_items(
             db, job.model_id, job.color, job.battery_type, job.power_spec
         )
-        
         for bom in bom_items:
             inv = _find_inventory_item(db, bom)
             if not inv:
                 continue
-                
             returned = bom.quantity_required * job.quantity
-            inv.consumed_quantity  -= returned
+ 
+            # FIX 8: guard against going negative
+            inv.consumed_quantity  = max(0, inv.consumed_quantity - returned)
             inv.remaining_quantity += returned
-            
+ 
             if job.location_id:
                 loc_stock = db.query(InventoryLocationStock).filter(
                     InventoryLocationStock.item_id     == inv.id,
@@ -609,10 +606,10 @@ def delete_job(
                 ).first()
                 if loc_stock:
                     loc_stock.quantity += returned
-
+ 
     db.query(StockMovement).filter(StockMovement.reference_id == job.id).delete()
     db.query(ScooterUnit).filter(ScooterUnit.assembly_job_id == job.id).delete()
-    
     db.delete(job)
     db.commit()
     return {"message": "Job deleted and parts successfully returned to inventory."}
+ 
