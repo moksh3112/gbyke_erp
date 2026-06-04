@@ -497,10 +497,11 @@ def complete_job(
     db.refresh(job)
     return _job_to_response(job, db)
 
+@router.post("/jobs/{job_id}/cancel")
 def cancel_job(
     job_id:       str,
-    db:           "Session",
-    current_user: "User",
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_manager_or_above)
 ):
     job = db.query(AssemblyJob).filter(AssemblyJob.id == job_id).first()
     if not job:
@@ -576,10 +577,12 @@ def get_summary(
         "completed_jobs":     completed_jobs,
         "units_awaiting_pdi": units_mfg_done,
     }
+
+@router.delete("/jobs/{job_id}")
 def delete_job(
     job_id:       str,
-    db:           "Session",
-    current_user: "User",
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_superadmin)
 ):
     job = db.query(AssemblyJob).filter(AssemblyJob.id == job_id).first()
     if not job:
