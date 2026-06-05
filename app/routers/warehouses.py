@@ -65,29 +65,42 @@ def get_warehouses(
         .all()
     )
 
-    result = []
-    for loc in locations:
-        units = db.query(ScooterUnit).filter(
-            ScooterUnit.current_location_id == loc.id
-        ).all()
+    # One grouped query for all (location, status) counts — avoids N+1.
+    from sqlalchemy import func
+    rows = (
+        db.query(
+            ScooterUnit.current_location_id,
+            ScooterUnit.status,
+            func.count(ScooterUnit.id),
+        )
+        .filter(ScooterUnit.current_location_id.isnot(None))
+        .group_by(ScooterUnit.current_location_id, ScooterUnit.status)
+        .all()
+    )
+    totals:    dict = {}
+    pdi_map:   dict = {}
+    deliv_map: dict = {}
+    for loc_id, status, cnt in rows:
+        totals[loc_id] = totals.get(loc_id, 0) + cnt
+        if status == VehicleStatus.pdi_done:
+            pdi_map[loc_id] = pdi_map.get(loc_id, 0) + cnt
+        elif status == VehicleStatus.delivered:
+            deliv_map[loc_id] = deliv_map.get(loc_id, 0) + cnt
 
-        total     = len(units)
-        pdi_done  = sum(1 for u in units if u.status == VehicleStatus.pdi_done)
-        delivered = sum(1 for u in units if u.status == VehicleStatus.delivered)
-
-        result.append(WarehouseSummary(
+    return [
+        WarehouseSummary(
             id            = loc.id,
             name          = loc.name,
             location_type = loc.location_type,
             city          = loc.city,
             state         = loc.state,
             is_active     = loc.is_active,
-            total_units   = total,
-            pdi_done      = pdi_done,
-            delivered     = delivered,
-        ))
-
-    return result
+            total_units   = totals.get(loc.id, 0),
+            pdi_done      = pdi_map.get(loc.id, 0),
+            delivered     = deliv_map.get(loc.id, 0),
+        )
+        for loc in locations
+    ]
 
 
 @router.get("/{location_id}/units", response_model=List[UnitAtLocation])
@@ -172,7 +185,7 @@ def transfer_unit(
 
     model_name = unit.model.model_name if unit.model else "Unknown"
     return {
-        "message":    f"Unit transferred successfully.",
+        "message":    "Unit transferred successfully.",
         "unit_id":    unit.id,
         "serial":     unit.serial_number,
         "model":      model_name,

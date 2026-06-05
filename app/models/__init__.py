@@ -435,6 +435,8 @@ class DamageRecord(Base):
     stage               = Column(Enum(DamageStage), nullable=False)
     inventory_item_id   = Column(String, ForeignKey("inventory_items.id"), nullable=True)
     scooter_unit_id     = Column(String, ForeignKey("scooter_units.id"), nullable=True)
+    dealer_id           = Column(String, ForeignKey("dealers.id"), nullable=True)
+    part_name_free      = Column(String(300), nullable=True)
     quantity            = Column(Integer, default=1)
     root_cause          = Column(Text)
     corrective_action   = Column(Text)

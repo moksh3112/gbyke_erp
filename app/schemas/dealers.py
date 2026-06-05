@@ -44,6 +44,7 @@ class UnitAtDealer(BaseModel):
     serial_number:  str
     chassis_number: Optional[str] = None
     pdi_number:     Optional[str] = None
+    model_id:       Optional[str] = None
     model_name:     Optional[str] = None
     color:          Optional[str] = None
     status:         str

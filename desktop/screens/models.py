@@ -2,8 +2,8 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTableWidget, QTableWidgetItem,
     QLineEdit, QDialog, QFormLayout, QComboBox,
-    QMessageBox, QHeaderView, QFrame, QTextEdit,
-    QAbstractItemView, QTabWidget, QSpinBox
+    QMessageBox, QHeaderView, QTextEdit,
+    QAbstractItemView, QTabWidget
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
@@ -922,6 +922,211 @@ class LocationsTab(QWidget):
                 QMessageBox.critical(self, "Error", e.message)
 
 
+# ── GENERAL PARTS TAB ────────────────────────────────────────
+
+class AddGeneralPartDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.result_data = {}
+        self.setWindowTitle("Add General Part")
+        self.setFixedWidth(420)
+        self.setModal(True)
+        self._build_ui()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+        lay.setSpacing(14)
+        lay.setContentsMargins(20, 20, 20, 20)
+
+        form = QFormLayout()
+        form.setSpacing(12)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        inp = "border:1px solid #ddd; border-radius:4px; padding:0 8px; color:#1a1a1a; background:white;"
+
+        self.name_input = QLineEdit()
+        self.name_input.setFixedHeight(36)
+        self.name_input.setStyleSheet(inp)
+        self.name_input.setPlaceholderText("e.g. Charger, Battery, Tyre")
+        self.name_input.textChanged.connect(self._update_sku)
+        form.addRow(QLabel("Part Name *"), self.name_input)
+
+        self.sku_label = QLabel("SKU Preview: —")
+        self.sku_label.setStyleSheet("color:#6b7280; font-size:11px; font-style:italic;")
+        form.addRow("", self.sku_label)
+
+        self.notes_input = QLineEdit()
+        self.notes_input.setFixedHeight(36)
+        self.notes_input.setStyleSheet(inp)
+        self.notes_input.setPlaceholderText("Optional description")
+        form.addRow(QLabel("Notes"), self.notes_input)
+        lay.addLayout(form)
+
+        btn_row = QHBoxLayout()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFixedHeight(36)
+        cancel_btn.clicked.connect(self.reject)
+        cancel_btn.setStyleSheet("border:1px solid #ddd; border-radius:6px; color:#666;")
+        save_btn = QPushButton("Add Part")
+        save_btn.setFixedHeight(36)
+        save_btn.setDefault(True)
+        save_btn.setStyleSheet("background:#2563eb; color:white; border:none; border-radius:6px; font-weight:600;")
+        save_btn.clicked.connect(self._save)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(save_btn)
+        lay.addLayout(btn_row)
+
+    def _update_sku(self):
+        name = self.name_input.text().strip()
+        if name:
+            sku = "GEN-" + re.sub(r'[^a-zA-Z0-9]', '', name).upper()[:12]
+            self.sku_label.setText(f"SKU Preview: {sku}")
+        else:
+            self.sku_label.setText("SKU Preview: —")
+
+    def _save(self):
+        name = self.name_input.text().strip()
+        if not name:
+            QMessageBox.warning(self, "Missing", "Part name is required.")
+            return
+        sku = "GEN-" + re.sub(r'[^a-zA-Z0-9]', '', name).upper()[:12]
+        self.result_data = {
+            "part_name":         name,
+            "sku":               sku,
+            "quantity_required": 1,
+            "notes":             self.notes_input.text().strip() or None,
+        }
+        self.accept()
+
+
+class GeneralPartsTab(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.workers = []
+        self._gen_model_id = None
+        self._build_ui()
+        self._load_gen_model_id()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 16, 0, 0)
+        layout.setSpacing(12)
+
+        desc = QLabel("Define parts not tied to any specific scooter model — e.g. Charger, Battery Pack, Tyre. "
+                       "These appear in the inventory stock entry under 'General / No Specific Model'.")
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color:#64748b; font-size:12px; background:#f0f9ff; "
+                           "padding:10px 12px; border-radius:6px;")
+        layout.addWidget(desc)
+
+        hdr = QHBoxLayout()
+        hdr.addStretch()
+        if Session.role in ["superadmin", "manager"]:
+            add_btn = QPushButton("+ Add General Part")
+            add_btn.setFixedHeight(36)
+            add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            add_btn.setStyleSheet("""
+                QPushButton { background:#2563eb; color:white; border:none;
+                    border-radius:6px; padding:0 16px; font-weight:600; }
+                QPushButton:hover { background:#1d4ed8; }
+            """)
+            add_btn.clicked.connect(self._add_part)
+            hdr.addWidget(add_btn)
+        layout.addLayout(hdr)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(3)
+        self.table.setHorizontalHeaderLabels(["Part Name", "SKU", "Actions"])
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(2, 100)
+        self.table.verticalHeader().setDefaultSectionSize(42)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setStyleSheet("""
+            QTableWidget { border:1px solid #e5e7eb; border-radius:8px; gridline-color:#f3f4f6; }
+            QHeaderView::section {
+                background:#f8fafc; padding:8px; border:none;
+                border-bottom:1px solid #e5e7eb; font-weight:600; color:#374151;
+            }
+            QTableWidget::item { padding:6px 8px; color:#1a1a1a; }
+            QTableWidget::item:alternate { background:#f9fafb; }
+        """)
+        layout.addWidget(self.table)
+
+        self.status_label = QLabel("Loading…")
+        self.status_label.setStyleSheet("color:#94a3b8; font-size:12px;")
+        layout.addWidget(self.status_label)
+
+    def _load_gen_model_id(self):
+        # General parts are fetched directly via the /master/general-parts endpoint.
+        self._load_parts()
+
+    def _load_parts(self):
+        self.table.setRowCount(0)
+        self.status_label.setText("Loading…")
+        try:
+            parts = APIClient.get("/master/general-parts")
+            self._parts = parts
+            self.table.setRowCount(len(parts))
+            for r, p in enumerate(parts):
+                self.table.setItem(r, 0, QTableWidgetItem(p.get("part_name", "")))
+                self.table.setItem(r, 1, QTableWidgetItem(p.get("sku", "")))
+                if Session.role in ["superadmin", "manager"]:
+                    del_btn = QPushButton("Delete")
+                    del_btn.setFixedHeight(28)
+                    del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                    del_btn.setStyleSheet("""
+                        QPushButton { background:#dc2626; color:white; border:none;
+                            border-radius:4px; font-size:11px; padding:0 10px; }
+                        QPushButton:hover { background:#b91c1c; }
+                    """)
+                    del_btn.clicked.connect(lambda _, part=p: self._delete_part(part))
+                    w = QWidget(); wl = QHBoxLayout(w)
+                    wl.setContentsMargins(4, 2, 4, 2)
+                    wl.addWidget(del_btn)
+                    self.table.setCellWidget(r, 2, w)
+            self.status_label.setText(f"{len(parts)} general part(s) defined")
+        except Exception as e:
+            self.status_label.setText(f"Error: {e}")
+
+    def _add_part(self):
+        dlg = AddGeneralPartDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        # Get GEN model id then post BOM item
+        try:
+            # Use manufacturing/bom endpoint — needs model_id
+            # First get GEN model id via all models
+            from desktop.utils.api_client import APIError
+            # Fetch GEN model id from the backend
+            gen_id = APIClient.get("/master/general-parts-model-id")
+            data = {**dlg.result_data, "model_id": gen_id["model_id"]}
+            APIClient.post("/manufacturing/bom", data)
+            self._load_parts()
+        except APIError as e:
+            QMessageBox.critical(self, "Error", e.message)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
+    def _delete_part(self, part):
+        reply = QMessageBox.question(
+            self, "Delete Part",
+            f"Delete general part '{part['part_name']}'?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                APIClient.delete(f"/manufacturing/bom/{part['id']}")
+                self._load_parts()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", str(e))
+
+
 # ── MASTER DATA SCREEN ────────────────────────────────────────
 
 class MasterDataScreen(QWidget):
@@ -959,9 +1164,10 @@ class MasterDataScreen(QWidget):
             }
         """)
 
-        tabs.addTab(ModelsTab(),    "🛵  Scooter Models")
-        tabs.addTab(ColorsTab(),    "🎨  Colors")
-        tabs.addTab(BatteriesTab(), "🔋  Batteries")
-        tabs.addTab(LocationsTab(), "🏢  Locations")
+        tabs.addTab(ModelsTab(),        "🛵  Scooter Models")
+        tabs.addTab(ColorsTab(),        "🎨  Colors")
+        tabs.addTab(BatteriesTab(),     "🔋  Batteries")
+        tabs.addTab(LocationsTab(),     "🏢  Locations")
+        tabs.addTab(GeneralPartsTab(),  "⚙️  General Parts")
 
         layout.addWidget(tabs)

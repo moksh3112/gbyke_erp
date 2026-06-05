@@ -12,10 +12,11 @@ from app.models import (
 )
 from app.models import AssemblyStatus
 from app.schemas.manufacturing import (
-    BOMItemCreate, BOMItemUpdate, BOMItemResponse,
-    AssemblyJobCreate, AssemblyJobUpdate, AssemblyJobResponse,
-    StockCheckResponse, StockShortageItem
+    BOMItemCreate, BOMItemUpdate,
+    AssemblyJobCreate,
+    StockCheckResponse,
 )
+from pydantic import BaseModel
 import uuid
 
 router = APIRouter(prefix="/manufacturing", tags=["Manufacturing"])
@@ -201,6 +202,14 @@ def create_bom_item(
 
     if not data.part_name and not data.inventory_item_id:
         raise HTTPException(400, "Either part_name or inventory_item_id is required.")
+
+    if data.part_name:
+        existing = db.query(BOMItem).filter(
+            BOMItem.model_id == data.model_id,
+            BOMItem.part_name == data.part_name.strip()
+        ).first()
+        if existing:
+            raise HTTPException(400, f"'{data.part_name.strip()}' already exists in this model's BOM.")
 
     bom_item = BOMItem(
         id                = gen_uuid(),
@@ -604,8 +613,109 @@ def delete_job(
                     loc_stock.quantity += returned
  
     db.query(StockMovement).filter(StockMovement.reference_id == job.id).delete()
+    unit_ids = [u.id for u in db.query(ScooterUnit.id).filter(ScooterUnit.assembly_job_id == job.id)]
+    if unit_ids:
+        from app.models import DamageRecord
+        db.query(DamageRecord).filter(DamageRecord.scooter_unit_id.in_(unit_ids)).delete(synchronize_session=False)
     db.query(ScooterUnit).filter(ScooterUnit.assembly_job_id == job.id).delete()
     db.delete(job)
     db.commit()
     return {"message": "Job deleted and parts successfully returned to inventory."}
+
+
+# ── LOG EXISTING (already-manufactured) SCOOTERS ──────────────
+
+class LogExistingScootersRequest(BaseModel):
+    model_id:          str
+    color:             Optional[str] = None
+    battery_type:      Optional[str] = None
+    power_spec:        Optional[str] = None
+    location_id:       Optional[str] = None
+    quantity:          int
+    status:            str           = "manufacturing_done"  # or "pdi_done"
+    manufactured_date: Optional[str] = None
+
+
+@router.post("/log-existing")
+def log_existing_scooters(
+    data:         LogExistingScootersRequest,
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_manager_or_above),
+):
+    """Bulk-log already-manufactured scooters into inventory (no assembly job)."""
+    from app.models import VehicleStatus
+    from datetime import date as _date
+
+    model = db.query(ScooterModel).filter(ScooterModel.id == data.model_id).first()
+    if not model:
+        raise HTTPException(404, "Scooter model not found.")
+    if data.quantity < 1 or data.quantity > 10000:
+        raise HTTPException(400, "Quantity must be between 1 and 10000.")
+    try:
+        status = VehicleStatus(data.status)
+    except ValueError:
+        raise HTTPException(400, f"Invalid status '{data.status}'.")
+    if status not in (VehicleStatus.manufacturing_done, VehicleStatus.pdi_done):
+        raise HTTPException(400, "Status must be 'manufacturing_done' or 'pdi_done'.")
+
+    mfg_date = None
+    if data.manufactured_date:
+        try:
+            mfg_date = _date.fromisoformat(data.manufactured_date)
+        except ValueError:
+            raise HTTPException(400, "Invalid manufactured_date. Use YYYY-MM-DD.")
+
+    batch = gen_uuid()[:8]
+    for i in range(data.quantity):
+        unit = ScooterUnit(
+            id                  = gen_uuid(),
+            serial_number       = f"LOG-{batch}-{i+1:04d}",
+            model_id            = data.model_id,
+            color               = (data.color or None),
+            battery_type        = (data.battery_type or None),
+            power_spec          = (data.power_spec or None),
+            current_location_id = data.location_id,
+            status              = status,
+            manufactured_date   = mfg_date,
+        )
+        db.add(unit)
+
+    db.commit()
+    return {"message": f"Logged {data.quantity} scooter(s).", "count": data.quantity, "batch": batch}
+
+
+@router.get("/logged-units")
+def list_logged_units(
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_any_role),
+    limit:        int     = 300,
+):
+    """Recently logged (manually entered) scooter units — those without an assembly job."""
+    units = (
+        db.query(ScooterUnit)
+        .filter(ScooterUnit.assembly_job_id.is_(None))
+        .order_by(ScooterUnit.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    loc_ids = {u.current_location_id for u in units if u.current_location_id}
+    loc_names = {}
+    if loc_ids:
+        for loc in db.query(Location).filter(Location.id.in_(loc_ids)).all():
+            loc_names[loc.id] = loc.name
+
+    return [
+        {
+            "id":                u.id,
+            "serial_number":     u.serial_number,
+            "model_name":        u.model.model_name if u.model else "—",
+            "color":             u.color or "—",
+            "battery_type":      u.battery_type or "—",
+            "power_spec":        u.power_spec or "—",
+            "status":            u.status.value if u.status else "—",
+            "location":          loc_names.get(u.current_location_id, "—"),
+            "manufactured_date": str(u.manufactured_date) if u.manufactured_date else "—",
+        }
+        for u in units
+    ]
  

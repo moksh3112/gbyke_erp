@@ -107,6 +107,7 @@ class Sidebar(QWidget):
         common = [
             ("📦", "Inventory",     "inventory"),
             ("🏭", "Manufacturing",  "manufacturing"),
+            ("📝", "Scooter Log",    "scooter_log"),
             ("🛵", "PDI",           "pdi"),
         ]
         # Manager and above

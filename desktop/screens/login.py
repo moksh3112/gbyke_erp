@@ -1,14 +1,12 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QLineEdit, QFrame, QMessageBox
+    QPushButton, QLineEdit, QFrame
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QSize
-from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter, QColor, QPen
-from PyQt6.QtSvgWidgets import QSvgWidget
+from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter
 from PyQt6.QtCore import QByteArray
 from desktop.utils.api_client import APIClient, APIError
 from desktop.utils.session import Session
-from desktop.utils.updater import check_for_updates
 
 
 class LoginWorker(QThread):

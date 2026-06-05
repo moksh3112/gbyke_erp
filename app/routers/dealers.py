@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List
 from datetime import date
 
 from app.database import get_db
@@ -26,10 +26,11 @@ def _generate_dealer_code(name: str, db: Session) -> str:
         seq += 1
 
 
-def _dealer_to_response(dealer: Dealer, db: Session) -> DealerResponse:
-    unit_count = db.query(ScooterUnit).filter(
-        ScooterUnit.current_dealer_id == dealer.id
-    ).count()
+def _dealer_to_response(dealer: Dealer, db: Session, unit_count: int = None) -> DealerResponse:
+    if unit_count is None:
+        unit_count = db.query(ScooterUnit).filter(
+            ScooterUnit.current_dealer_id == dealer.id
+        ).count()
     return DealerResponse(
         id=dealer.id,
         dealer_name=dealer.dealer_name,
@@ -50,6 +51,7 @@ def _unit_to_response(unit: ScooterUnit) -> UnitAtDealer:
         serial_number=unit.serial_number,
         chassis_number=unit.chassis_number,
         pdi_number=unit.pdi_number,
+        model_id=unit.model_id,
         model_name=unit.model.model_name if unit.model else None,
         color=unit.color,
         status=unit.status.value,
@@ -67,7 +69,16 @@ def get_dealers(
     if active_only:
         q = q.filter(Dealer.is_active == True)
     dealers = q.order_by(Dealer.dealer_name).all()
-    return [_dealer_to_response(d, db) for d in dealers]
+
+    # One grouped query for all dealer unit counts (avoids N+1)
+    from sqlalchemy import func as _func
+    counts = dict(
+        db.query(ScooterUnit.current_dealer_id, _func.count(ScooterUnit.id))
+        .filter(ScooterUnit.current_dealer_id.isnot(None))
+        .group_by(ScooterUnit.current_dealer_id)
+        .all()
+    )
+    return [_dealer_to_response(d, db, counts.get(d.id, 0)) for d in dealers]
 
 
 @router.post("/", response_model=DealerResponse)

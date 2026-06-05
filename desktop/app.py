@@ -126,6 +126,9 @@ class MainWindow(QMainWindow):
         elif screen == "manufacturing":
             from desktop.screens.manufacturing import ManufacturingScreen
             widget = ManufacturingScreen()
+        elif screen == "scooter_log":
+            from desktop.screens.scooter_log import ScooterLogScreen
+            widget = ScooterLogScreen()
         elif screen == "models":
             from desktop.screens.models import MasterDataScreen
             widget = MasterDataScreen()

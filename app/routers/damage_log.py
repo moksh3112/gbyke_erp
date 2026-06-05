@@ -5,7 +5,7 @@ from typing import Optional
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.core.dependencies import require_any_role, require_manager_or_above
+from app.core.dependencies import require_any_role
 from app.models import (
     StockMovement, InventoryItem,
     ScooterUnit, VehicleStatus, User,
@@ -21,6 +21,13 @@ class DamageRecordCreate(BaseModel):
     stage:           str        # "transit" or "dealer"
     part_name:       str
     notes:           Optional[str] = None
+
+
+class SparePartDamageCreate(BaseModel):
+    dealer_id:  str
+    part_name:  str
+    notes:      str
+    stage:      str = "dealer"
 
 
 @router.post("/")
@@ -50,34 +57,78 @@ def create_damage_record(
     return {"message": "Damage record created.", "id": record.id}
 
 
+@router.post("/spare-part-damage")
+def create_spare_part_damage(
+    data:         SparePartDamageCreate,
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_any_role),
+):
+    from app.models import Dealer
+    dealer = db.query(Dealer).filter(Dealer.id == data.dealer_id).first()
+    if not dealer:
+        raise HTTPException(404, "Dealer not found.")
+    try:
+        stage = DamageStage(data.stage)
+    except ValueError:
+        raise HTTPException(400, f"Invalid stage '{data.stage}'.")
+
+    record = DamageRecord(
+        dealer_id         = data.dealer_id,
+        stage             = stage,
+        part_name_free    = data.part_name,
+        root_cause        = data.part_name,
+        corrective_action = data.notes,
+        reported_by       = current_user.id,
+    )
+    db.add(record)
+    db.commit()
+    return {"message": "Spare part damage recorded.", "id": record.id}
+
+
 @router.get("/dealer-damages")
 def list_dealer_damages(
     scooter_unit_id: Optional[str] = None,
+    search:          Optional[str] = None,
     db:              Session = Depends(get_db),
     current_user:    User    = Depends(require_any_role),
 ):
-    q = db.query(DamageRecord, User).outerjoin(
+    from app.models import ScooterModel, Dealer
+    q = db.query(DamageRecord, User, ScooterUnit, Dealer).outerjoin(
         User, DamageRecord.reported_by == User.id
+    ).outerjoin(
+        ScooterUnit, DamageRecord.scooter_unit_id == ScooterUnit.id
+    ).outerjoin(
+        Dealer, DamageRecord.dealer_id == Dealer.id
     ).filter(
         DamageRecord.stage.in_([DamageStage.transit, DamageStage.dealer])
     )
     if scooter_unit_id:
         q = q.filter(DamageRecord.scooter_unit_id == scooter_unit_id)
+    if search:
+        q = q.outerjoin(ScooterModel, ScooterUnit.model_id == ScooterModel.id).filter(
+            DamageRecord.root_cause.ilike(f"%{search}%") |
+            DamageRecord.part_name_free.ilike(f"%{search}%") |
+            ScooterUnit.serial_number.ilike(f"%{search}%") |
+            ScooterModel.model_name.ilike(f"%{search}%") |
+            ScooterUnit.color.ilike(f"%{search}%")
+        )
 
     rows = q.order_by(DamageRecord.created_at.desc()).all()
 
     result = []
-    for rec, reporter in rows:
-        unit = db.query(ScooterUnit).filter(ScooterUnit.id == rec.scooter_unit_id).first() if rec.scooter_unit_id else None
+    for rec, reporter, unit, dealer in rows:
+        is_spare = rec.scooter_unit_id is None
         result.append({
             "id":            rec.id,
-            "serial_number": unit.serial_number if unit else "—",
-            "model_name":    unit.model.model_name if unit and unit.model else "—",
+            "serial_number": unit.serial_number if unit else ("—" if not is_spare else "Spare Part"),
+            "model_name":    (unit.model.model_name if unit and unit.model else None) or (dealer.dealer_name if dealer else "—"),
+            "color":         unit.color if unit else "—",
             "stage":         rec.stage.value,
             "part_name":     rec.root_cause or "—",
             "notes":         rec.corrective_action or "",
             "reported_by":   reporter.full_name if reporter else "—",
             "created_at":    rec.created_at.strftime("%d-%b-%Y  %H:%M") if rec.created_at else "—",
+            "is_spare_part": is_spare,
         })
     return result
 
@@ -91,18 +142,13 @@ def get_summary(
         StockMovement.movement_type.in_(["defective", "damaged"])
     ).scalar() or 0
 
-    damaged_units = db.query(func.count(ScooterUnit.id)).filter(
-        ScooterUnit.status.in_([VehicleStatus.defective, VehicleStatus.damaged])
-    ).scalar() or 0
-
-    cancelled_jobs = db.query(func.count(AssemblyJob.id)).filter(
-        AssemblyJob.status == AssemblyStatus.cancelled
+    after_sale_events = db.query(func.count(DamageRecord.id)).filter(
+        DamageRecord.stage.in_([DamageStage.transit, DamageStage.dealer])
     ).scalar() or 0
 
     return {
         "damaged_parts_qty":  int(damaged_parts),
-        "damaged_units":      int(damaged_units),
-        "cancelled_jobs":     int(cancelled_jobs),
+        "after_sale_events":  int(after_sale_events),
     }
 
 
@@ -126,7 +172,11 @@ def list_damaged_parts(
     if to_date:
         q = q.filter(StockMovement.created_at <= to_date + " 23:59:59")
     if search:
-        q = q.filter(InventoryItem.item_name.ilike(f"%{search}%"))
+        q = q.filter(
+            InventoryItem.item_name.ilike(f"%{search}%") |
+            InventoryItem.sku.ilike(f"%{search}%") |
+            InventoryItem.model_name.ilike(f"%{search}%")
+        )
 
     rows = q.order_by(StockMovement.created_at.desc()).all()
 
@@ -153,7 +203,6 @@ def list_damaged_units(
     db:        Session = Depends(get_db),
     current_user: User = Depends(require_any_role),
 ):
-    from app.models import ScooterModel
     q = db.query(ScooterUnit).filter(
         ScooterUnit.status.in_([VehicleStatus.defective, VehicleStatus.damaged])
     )

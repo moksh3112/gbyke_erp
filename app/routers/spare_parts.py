@@ -7,7 +7,7 @@ from app.database import get_db
 from app.core.dependencies import require_any_role
 from app.models import (
     DispatchNote, DispatchNotePart, Dealer, User,
-    InventoryItem, Location,
+    Location,
 )
 
 router = APIRouter(prefix="/spare-parts", tags=["Spare Parts"])
@@ -59,12 +59,16 @@ def list_dispatches(
 
     rows = q.order_by(DispatchNote.dispatch_date.desc()).all()
 
+    # Batch-fetch all referenced locations in one query (avoids N+1)
+    loc_ids = {part.location_id for part, _, _ in rows if part.location_id}
+    loc_names = {}
+    if loc_ids:
+        for loc in db.query(Location).filter(Location.id.in_(loc_ids)).all():
+            loc_names[loc.id] = loc.name
+
     result = []
     for part, note, dealer in rows:
-        loc_name = None
-        if part.location_id:
-            loc = db.query(Location).filter(Location.id == part.location_id).first()
-            loc_name = loc.name if loc else None
+        loc_name = loc_names.get(part.location_id) if part.location_id else None
         result.append({
             "id":            part.id,
             "dispatch_date": str(note.dispatch_date),

@@ -54,12 +54,14 @@ class LoadDealerDamagesWorker(QThread):
     done  = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, parent=None):
+    def __init__(self, search="", parent=None):
         super().__init__(parent)
+        self.search = search
 
     def run(self):
         try:
-            self.done.emit(APIClient.get("/damage-log/dealer-damages"))
+            qs = f"?search={self.search}" if self.search else ""
+            self.done.emit(APIClient.get(f"/damage-log/dealer-damages{qs}"))
         except APIError as e:
             self.error.emit(e.message)
 
@@ -209,7 +211,7 @@ class DamageLogScreen(QWidget):
         fr.setSpacing(8)
 
         self.parts_search = QLineEdit()
-        self.parts_search.setPlaceholderText("Search part name…")
+        self.parts_search.setPlaceholderText("Search part name, model or colour…")
         self.parts_search.setFixedHeight(36)
         self.parts_search.setStyleSheet(_INPUT_STYLE)
         self.parts_search.returnPressed.connect(self._load_parts)
@@ -278,6 +280,23 @@ class DamageLogScreen(QWidget):
         info = QLabel("Damage logged from the Dealers screen — during transit to dealer or after sale.")
         info.setStyleSheet("color:#64748b; font-size:12px;")
         self._after_lay.addWidget(info)
+
+        afr = QHBoxLayout()
+        afr.setSpacing(8)
+        self.after_search = QLineEdit()
+        self.after_search.setPlaceholderText("Search part/damage, model, serial or colour…")
+        self.after_search.setFixedHeight(36)
+        self.after_search.setStyleSheet(_INPUT_STYLE)
+        self.after_search.returnPressed.connect(self._load_after)
+        after_search_btn = self._action_btn("🔍  Search", "#dc2626", self._load_after)
+        after_clear_btn  = self._clear_btn_widget(lambda: [
+            self.after_search.clear(),
+            self._load_after(),
+        ])
+        afr.addWidget(self.after_search, 1)
+        afr.addWidget(after_search_btn)
+        afr.addWidget(after_clear_btn)
+        self._after_lay.addLayout(afr)
 
         self.after_status = QLabel("Loading…")
         self.after_status.setStyleSheet("color:#94a3b8; font-size:12px;")
@@ -352,7 +371,7 @@ class DamageLogScreen(QWidget):
     def _load_after(self):
         self.after_status.setText("Loading…")
         self.after_table.setRowCount(0)
-        w = LoadDealerDamagesWorker(self)
+        w = LoadDealerDamagesWorker(search=self.after_search.text().strip())
         w.done.connect(self._populate_after)
         w.error.connect(lambda e: self.after_status.setText(f"Error: {e}"))
         self.workers.append(w)
@@ -383,12 +402,15 @@ class DamageLogScreen(QWidget):
     def _populate_after(self, rows):
         self.after_table.setRowCount(len(rows))
         self.after_status.setText(f"{len(rows)} record(s)")
-        stage_labels = {"transit": "During Transit",    "dealer": "After Sale"}
-        stage_colors = {"transit": "#ea580c",           "dealer": "#dc2626"}
+        stage_labels = {"transit": "During Transit", "dealer": "After Sale"}
+        stage_colors = {"transit": "#ea580c",        "dealer": "#dc2626"}
         for r, row in enumerate(rows):
             stage = row["stage"]
             self.after_table.setItem(r, 0, _cell(row["created_at"]))
-            self.after_table.setItem(r, 1, _cell(row["serial_number"]))
+            serial_cell = _cell(row["serial_number"])
+            if row.get("is_spare_part"):
+                serial_cell = _cell("🔧 Spare Part", color="#7c3aed")
+            self.after_table.setItem(r, 1, serial_cell)
             self.after_table.setItem(r, 2, _cell(row["model_name"]))
             self.after_table.setItem(r, 3, _cell(
                 stage_labels.get(stage, stage), color=stage_colors.get(stage)

@@ -134,11 +134,12 @@ def _setup_model_combo(combo: QComboBox, models_data: list):
 # ── IMPORT FORM ───────────────────────────────────────────────
 
 class ImportForm(QWidget):
-    def __init__(self, model_names, part_names, locations, parent=None):
+    def __init__(self, model_names, part_names, locations, colors=None, parent=None):
         super().__init__(parent)
         self._model_names = model_names
         self._part_names  = part_names
         self._locations   = locations
+        self._colors      = colors or []
         self._bom_parts   = []
         self._build_ui()
 
@@ -166,6 +167,8 @@ class ImportForm(QWidget):
         self.model_combo = QComboBox()
         self.model_combo.setFixedHeight(36)
         _setup_model_combo(self.model_combo, self._model_names)
+        # Add general option for non-model-specific parts (charger, battery, tyre etc.)
+        self.model_combo.addItem("⚙  General / No Specific Model", {"model_name": "", "model_code": "GEN"})
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         m = QLabel("Scooter Model *"); m.setStyleSheet(lbl)
         layout.addRow(m, self.model_combo)
@@ -184,14 +187,16 @@ class ImportForm(QWidget):
         self.part_hint.setStyleSheet("color:#94a3b8; font-size:11px; font-style:italic;")
         layout.addRow("", self.part_hint)
 
-        # Colour
-        self.colour_input = QLineEdit()
-        self.colour_input.setPlaceholderText("e.g. Red, Blue  —  leave blank if no colour")
-        self.colour_input.setFixedHeight(36)
-        self.colour_input.setStyleSheet(inp)
-        self.colour_input.textChanged.connect(self._update_sku)
+        # Colour (optional dropdown — empty means no colour)
+        self.colour_combo = QComboBox()
+        self.colour_combo.setFixedHeight(36)
+        self.colour_combo.setStyleSheet(inp)
+        self.colour_combo.addItem("— No colour —", "")
+        for cname in self._colors:
+            self.colour_combo.addItem(cname, cname)
+        self.colour_combo.currentIndexChanged.connect(self._update_sku)
         c = QLabel("Colour"); c.setStyleSheet(lbl)
-        layout.addRow(c, self.colour_input)
+        layout.addRow(c, self.colour_combo)
 
         # Location
         self.location_combo = QComboBox()
@@ -224,30 +229,57 @@ class ImportForm(QWidget):
     def _on_model_changed(self):
         model_data = self.model_combo.currentData() or {}
         model_name = model_data.get("model_name", "") if isinstance(model_data, dict) else ""
+        model_code = model_data.get("model_code", "") if isinstance(model_data, dict) else ""
+
+        self.part_combo.clear()
+        self._bom_parts = []
+
+        # General / No Model — load from General Parts master data
+        if model_code == "GEN" and not model_name:
+            self.part_combo.setEditable(False)
+            self.part_hint.setText("Loading general parts…")
+            try:
+                gen_parts = APIClient.get("/master/general-parts")
+                self._bom_parts = gen_parts
+                for gp in gen_parts:
+                    label = gp.get("part_name", "—")
+                    if gp.get("sku"):
+                        label += f"  [{gp['sku']}]"
+                    self.part_combo.addItem(label, gp)
+                count = len(gen_parts)
+                self.part_hint.setText(
+                    f"✅ {count} general part(s) — add more in Master Data → General Parts"
+                    if count > 0 else "⚠️ No general parts defined yet — add them in Master Data → General Parts"
+                )
+            except Exception:
+                self.part_hint.setText("Could not load general parts")
+            self.part_combo.setCurrentIndex(-1)
+            self._update_sku()
+            return
+
         if not model_name:
-            self.part_combo.clear()
             self.part_combo.setCurrentIndex(-1)
             self.part_hint.setText("← Select a model to load BOM parts")
             return
 
         self.part_hint.setText("Loading BOM parts...")
-        self.part_combo.clear()
-
         try:
             models   = APIClient.get("/master/models")
             model_id = next(
-                (m["id"] for m in models if m["model_name"] == model_name),
-                None
+                (m["id"] for m in models if m["model_name"] == model_name), None
             )
             if model_id:
-                bom_parts = APIClient.get(f"/manufacturing/bom/{model_id}/parts")
-                self._bom_parts = bom_parts
-                for part in bom_parts:
-                    self.part_combo.addItem(part["part_name"], part["part_name"])
-                count = len(bom_parts)
+                bom_items = APIClient.get(f"/manufacturing/bom/{model_id}")
+                self._bom_parts = bom_items
+                for item in bom_items:
+                    label = item.get("part_name") or item.get("item_name") or "—"
+                    if item.get("sku"):
+                        label += f"  [{item['sku']}]"
+                    self.part_combo.addItem(label, item)
+                count = len(bom_items)
                 self.part_hint.setText(
-                    f"✅ {count} parts loaded from BOM"
-                    if count > 0 else "⚠️ No BOM parts defined for this model yet"
+                    f"✅ {count} BOM parts loaded — only BOM parts allowed for this model"
+                    if count > 0 else "⚠️ No BOM defined — add parts in Master Data first"
                 )
             else:
                 self.part_hint.setText("Model not found in master data")
@@ -258,21 +290,43 @@ class ImportForm(QWidget):
         self._update_sku()
 
     def _update_sku(self):
+        # Prefer the stored BOM SKU over regenerating
+        bom_item = self.part_combo.currentData()
+        if isinstance(bom_item, dict) and bom_item.get("sku"):
+            self.sku_label.setText(f"Auto SKU: {bom_item['sku']}  ✓ from BOM")
+            self.sku_label.setStyleSheet("color:#16a34a; font-size:11px; font-weight:600;")
+            return
+
+        # Fallback: regenerate from model_code + typed part name
         model_data = self.model_combo.currentData() or {}
         model_code = model_data.get("model_code", "") if isinstance(model_data, dict) else ""
         part       = self.part_combo.currentText().strip()
-        colour     = self.colour_input.text().strip()
+        colour     = self.colour_combo.currentData() or ""
         if model_code and part:
             self.sku_label.setText(f"Auto SKU: {generate_sku(model_code, part, colour)}")
+            self.sku_label.setStyleSheet("color:#6b7280; font-size:11px; font-style:italic;")
         else:
             self.sku_label.setText("Auto SKU: —")
+            self.sku_label.setStyleSheet("color:#6b7280; font-size:11px; font-style:italic;")
 
     def validate(self) -> str:
-        if not self.model_combo.currentData():
-            return "Please select the scooter model name."
+        model_data = self.model_combo.currentData()
+        if not model_data:
+            return "Please select the scooter model or 'General / No Specific Model'."
         part = self.part_combo.currentText().strip()
         if not part:
             return "Please select or enter the part name."
+        model_code = model_data.get("model_code", "") if isinstance(model_data, dict) else ""
+        model_name = model_data.get("model_name", "") if isinstance(model_data, dict) else ""
+        # For all model selections, part must come from the list (BOM or General Parts)
+        bom_item = self.part_combo.currentData()
+        if not isinstance(bom_item, dict):
+            if model_code == "GEN":
+                return "Please select a part from the General Parts list."
+            return (
+                f"'{part}' is not defined in the BOM for {model_name}.\n"
+                "Add it to the BOM in Master Data first, or use 'General / No Specific Model'."
+            )
         if not self.location_combo.currentData():
             return "Please select a location."
         return ""
@@ -281,15 +335,23 @@ class ImportForm(QWidget):
         model_data = self.model_combo.currentData() or {}
         model_name = model_data.get("model_name", "") if isinstance(model_data, dict) else ""
         model_code = model_data.get("model_code", "") if isinstance(model_data, dict) else ""
-        part       = self.part_combo.currentText().strip()
-        colour     = self.colour_input.text().strip()
+        bom_item   = self.part_combo.currentData()
+        raw_text   = self.part_combo.currentText().strip()
+        part       = raw_text.split("  [")[0].strip() if "  [" in raw_text else raw_text
+        colour     = self.colour_combo.currentData() or ""
+        # Use stored BOM SKU if available; for General parts regenerate from part name
+        if isinstance(bom_item, dict) and bom_item.get("sku"):
+            sku = bom_item["sku"]
+        else:
+            prefix = model_code if model_code and model_code != "GEN" else "GEN"
+            sku = generate_sku(prefix, part, colour)
         return {
             "date":        self.date_input.date().toString("yyyy-MM-dd"),
             "model":       model_name,
             "part":        part,
             "colour":      colour,
             "quantity":    self.qty_spin.value(),
-            "sku":         generate_sku(model_code, part, colour),
+            "sku":         sku,
             "location_id": self.location_combo.currentData() or None,
         }
 
@@ -297,10 +359,12 @@ class ImportForm(QWidget):
 # ── DEFECTIVE FORM ────────────────────────────────────────────
 
 class DefectiveForm(QWidget):
-    def __init__(self, model_names, part_names, parent=None):
+    def __init__(self, model_names, part_names, colors=None, parent=None):
         super().__init__(parent)
         self._model_names = model_names
         self._part_names  = part_names
+        self._colors      = colors or []
+        self._bom_parts   = []
         self._build_ui()
 
     def _build_ui(self):
@@ -318,22 +382,33 @@ class DefectiveForm(QWidget):
         self.model_combo = QComboBox()
         self.model_combo.setFixedHeight(36)
         _setup_model_combo(self.model_combo, self._model_names)
+        self.model_combo.addItem("⚙  General / No Specific Model", {"model_name": "", "model_code": "GEN"})
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         m = QLabel("Scooter Model *"); m.setStyleSheet(lbl)
         layout.addRow(m, self.model_combo)
 
-        # Part
-        self.part_input = SearchableInput("Type or select part name...")
-        self.part_input.set_items(self._part_names)
+        # Part — combo loaded from BOM / General Parts (same as Purchase form)
+        self.part_combo = QComboBox()
+        self.part_combo.setFixedHeight(36)
+        self.part_combo.setEditable(True)
+        self.part_combo.setStyleSheet(inp)
+        self.part_combo.addItem("-- Select or type part name --", "")
         p = QLabel("Part Name *"); p.setStyleSheet(lbl)
-        layout.addRow(p, self.part_input)
+        layout.addRow(p, self.part_combo)
 
-        # Colour
-        self.colour_input = QLineEdit()
-        self.colour_input.setPlaceholderText("e.g. Red, Blue  —  leave blank if not applicable")
-        self.colour_input.setFixedHeight(36)
-        self.colour_input.setStyleSheet(inp)
+        self.part_hint = QLabel("← Select a model to load BOM parts")
+        self.part_hint.setStyleSheet("color:#94a3b8; font-size:11px; font-style:italic;")
+        layout.addRow("", self.part_hint)
+
+        # Colour (optional dropdown — empty means no colour)
+        self.colour_combo = QComboBox()
+        self.colour_combo.setFixedHeight(36)
+        self.colour_combo.setStyleSheet(inp)
+        self.colour_combo.addItem("— No colour —", "")
+        for cname in self._colors:
+            self.colour_combo.addItem(cname, cname)
         c = QLabel("Colour"); c.setStyleSheet(lbl)
-        layout.addRow(c, self.colour_input)
+        layout.addRow(c, self.colour_combo)
 
         # Quantity
         self.qty_spin = QSpinBox()
@@ -374,21 +449,98 @@ class DefectiveForm(QWidget):
         n = QLabel("Notes"); n.setStyleSheet(lbl)
         layout.addRow(n, self.notes_input)
 
+    def _on_model_changed(self):
+        model_data = self.model_combo.currentData() or {}
+        model_name = model_data.get("model_name", "") if isinstance(model_data, dict) else ""
+        model_code = model_data.get("model_code", "") if isinstance(model_data, dict) else ""
+
+        self.part_combo.clear()
+        self._bom_parts = []
+
+        # General / No Model — load from General Parts master data
+        if model_code == "GEN" and not model_name:
+            self.part_combo.setEditable(False)
+            self.part_hint.setText("Loading general parts…")
+            try:
+                gen_parts = APIClient.get("/master/general-parts")
+                self._bom_parts = gen_parts
+                for gp in gen_parts:
+                    label = gp.get("part_name", "—")
+                    if gp.get("sku"):
+                        label += f"  [{gp['sku']}]"
+                    self.part_combo.addItem(label, gp)
+                count = len(gen_parts)
+                self.part_hint.setText(
+                    f"✅ {count} general part(s) — add more in Master Data → General Parts"
+                    if count > 0 else "⚠️ No general parts defined yet — add them in Master Data → General Parts"
+                )
+            except Exception:
+                self.part_hint.setText("Could not load general parts")
+            self.part_combo.setCurrentIndex(-1)
+            return
+
+        if not model_name:
+            self.part_combo.setEditable(True)
+            self.part_combo.setCurrentIndex(-1)
+            self.part_hint.setText("← Select a model to load BOM parts")
+            return
+
+        self.part_combo.setEditable(True)
+        self.part_hint.setText("Loading BOM parts...")
+        try:
+            models   = APIClient.get("/master/models")
+            model_id = next(
+                (m["id"] for m in models if m["model_name"] == model_name), None
+            )
+            if model_id:
+                bom_items = APIClient.get(f"/manufacturing/bom/{model_id}")
+                self._bom_parts = bom_items
+                for item in bom_items:
+                    label = item.get("part_name") or item.get("item_name") or "—"
+                    if item.get("sku"):
+                        label += f"  [{item['sku']}]"
+                    self.part_combo.addItem(label, item)
+                count = len(bom_items)
+                self.part_hint.setText(
+                    f"✅ {count} BOM parts loaded — only BOM parts allowed for this model"
+                    if count > 0 else "⚠️ No BOM defined — add parts in Master Data first"
+                )
+            else:
+                self.part_hint.setText("Model not found in master data")
+        except Exception:
+            self.part_hint.setText("Could not load BOM parts")
+
+        self.part_combo.setCurrentIndex(-1)
+
     def validate(self) -> str:
         model_data = self.model_combo.currentData()
-        if not model_data or not (model_data.get("model_name") if isinstance(model_data, dict) else model_data):
-            return "Please select the scooter model name."
-        if not self.part_input.text():
-            return "Please enter the part name."
+        if not model_data:
+            return "Please select the scooter model or 'General / No Specific Model'."
+        part = self.part_combo.currentText().strip()
+        if not part:
+            return "Please select or enter the part name."
+        model_code = model_data.get("model_code", "") if isinstance(model_data, dict) else ""
+        model_name = model_data.get("model_name", "") if isinstance(model_data, dict) else ""
+        bom_item = self.part_combo.currentData()
+        if not isinstance(bom_item, dict):
+            if model_code == "GEN":
+                return "Please select a part from the General Parts list."
+            return (
+                f"'{part}' is not defined in the BOM for {model_name}.\n"
+                "Add it to the BOM in Master Data first, or use 'General / No Specific Model'."
+            )
         return ""
 
     def get_data(self) -> dict:
         model_data = self.model_combo.currentData() or {}
         model_name = model_data.get("model_name", "") if isinstance(model_data, dict) else ""
+        model_code = model_data.get("model_code", "") if isinstance(model_data, dict) else ""
+        raw_text   = self.part_combo.currentText().strip()
+        part       = raw_text.split("  [")[0].strip() if "  [" in raw_text else raw_text
         return {
-            "model":        model_name,
-            "part":         self.part_input.text(),
-            "colour":       self.colour_input.text().strip(),
+            "model":        model_name if model_code != "GEN" else "",
+            "part":         part,
+            "colour":       self.colour_combo.currentData() or "",
             "quantity":     self.qty_spin.value(),
             "type":         self.type_combo.currentData(),
             "damage_stage": self.stage_combo.currentData(),
@@ -400,12 +552,13 @@ class DefectiveForm(QWidget):
 
 class AddItemDialog(QDialog):
     def __init__(self, parent=None, existing_items=None,
-                 model_names=None, locations=None):
+                 model_names=None, locations=None, colors=None):
         super().__init__(parent)
         self.existing_items = existing_items or []
         self.result_data    = {}
         self.model_names    = model_names or []
         self.locations      = locations   or []
+        self.colors         = colors      or []
         self.part_names     = sorted(set(
             i.get("item_name", "") for i in self.existing_items
             if i.get("item_name")
@@ -443,8 +596,8 @@ class AddItemDialog(QDialog):
         layout.addWidget(div)
 
         self.stack = QStackedWidget()
-        self.import_form    = ImportForm(self.model_names, self.part_names, self.locations)
-        self.defective_form = DefectiveForm(self.model_names, self.part_names)
+        self.import_form    = ImportForm(self.model_names, self.part_names, self.locations, self.colors)
+        self.defective_form = DefectiveForm(self.model_names, self.part_names, self.colors)
         self.stack.addWidget(self.import_form)
         self.stack.addWidget(self.defective_form)
         layout.addWidget(self.stack)
@@ -1264,7 +1417,7 @@ class InventoryScreen(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
-            "", "Part Name", "Model", "Colour",
+            "", "Model", "Part Name", "Colour",
             "SKU", "Total Stock", "Consumed", "Defective/Damaged", "Actions"
         ])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
@@ -1410,8 +1563,8 @@ class InventoryScreen(QWidget):
             el.addWidget(expand_btn)
             self.table.setCellWidget(row, 0, ew)
 
-            self.table.setItem(row, 1, cell(item.get("item_name",  "")))
-            self.table.setItem(row, 2, cell(item.get("model_name", "")))
+            self.table.setItem(row, 1, cell(item.get("model_name", "")))
+            self.table.setItem(row, 2, cell(item.get("item_name",  "")))
             self.table.setItem(row, 3, cell(item.get("colour",     "")))
             self.table.setItem(row, 4, cell(item.get("sku",        "")))
 
@@ -1737,12 +1890,17 @@ class InventoryScreen(QWidget):
             locations = APIClient.get("/master/locations")
         except APIError:
             locations = []
+        try:
+            colors = [c.get("name", "") for c in APIClient.get("/master/colors")]
+        except APIError:
+            colors = []
 
         dlg = AddItemDialog(
             self,
             existing_items=self.items,
             model_names=model_names,
-            locations=locations
+            locations=locations,
+            colors=colors,
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             data       = dlg.result_data

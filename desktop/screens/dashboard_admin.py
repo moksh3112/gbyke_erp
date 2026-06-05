@@ -76,12 +76,6 @@ class AdminDashboard(QWidget):
             ("total_defective","Total Defective",       "—", "#7c3aed"),
         ]
 
-        # Add financial card only for superadmin
-        if Session.role == "superadmin":
-            card_defs.append(
-                ("inventory_value", "Inventory Value (₹)", "—", "#16a34a")
-            )
-
         for i, (key, title, value, color) in enumerate(card_defs):
             card = _stat_card(title, value, color)
             self.cards[key] = card
@@ -109,8 +103,6 @@ class AdminDashboard(QWidget):
             "low_stock":       data.get("low_stock_count", "—"),
             "total_consumed":  data.get("total_consumed", "—"),
             "total_defective": data.get("total_defective", "—"),
-            "inventory_value": f"₹{data.get('total_inventory_value', 0):,.0f}"
-                               if data.get("total_inventory_value") else "—",
         }
         for key, card in self.cards.items():
             for child in card.findChildren(QLabel):

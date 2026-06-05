@@ -3,9 +3,10 @@ from PyQt6.QtWidgets import (
     QPushButton, QTableWidget, QTableWidgetItem,
     QLineEdit, QComboBox, QHeaderView, QFrame,
     QTabWidget, QAbstractItemView, QDateEdit,
+    QDialog, QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDate
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QColor
 from desktop.utils.api_client import APIClient, APIError
 
 
@@ -159,6 +160,72 @@ def _cell(text, align=Qt.AlignmentFlag.AlignLeft):
     return item
 
 
+# ── DEALER DRILL-DOWN DIALOG ──────────────────────────────────
+
+class DealerSparePartsDialog(QDialog):
+    def __init__(self, dealer_id: str, dealer_name: str, parent=None):
+        super().__init__(parent)
+        self.dealer_id   = dealer_id
+        self.dealer_name = dealer_name
+        self.workers     = []
+        self.setWindowTitle(f"Spare Parts — {dealer_name}")
+        self.resize(820, 520)
+        self._build()
+        self._load()
+
+    def _build(self):
+        self._lay = QVBoxLayout(self)
+        self._lay.setContentsMargins(20, 16, 20, 16)
+        self._lay.setSpacing(12)
+
+        hdr = QLabel(f"🏪  {self.dealer_name} — Spare Parts Received")
+        hdr.setFont(QFont("Arial", 14, QFont.Weight.Bold))
+        hdr.setStyleSheet("color:#1e293b;")
+        self._lay.addWidget(hdr)
+
+        self.status = QLabel("Loading…")
+        self.status.setStyleSheet("color:#94a3b8; font-size:12px;")
+        self._lay.addWidget(self.status)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(
+            ["Date", "Part Name", "Qty", "Location", "Notes", "Dispatch Note"]
+        )
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(2, 55)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setStyleSheet(_TABLE_STYLE)
+        self._lay.addWidget(self.table, 1)
+
+        close_btn = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        close_btn.rejected.connect(self.reject)
+        self._lay.addWidget(close_btn)
+
+    def _load(self):
+        w = LoadDispatchesWorker(dealer_id=self.dealer_id)
+        w.done.connect(self._populate)
+        w.error.connect(lambda e: self.status.setText(f"Error: {e}"))
+        self.workers.append(w)
+        w.start()
+
+    def _populate(self, rows):
+        self.table.setRowCount(len(rows))
+        self.status.setText(f"{len(rows)} dispatch record(s)")
+        for r, row in enumerate(rows):
+            self.table.setItem(r, 0, _cell(row["dispatch_date"]))
+            self.table.setItem(r, 1, _cell(row["part_name"]))
+            self.table.setItem(r, 2, _cell(row["quantity"], Qt.AlignmentFlag.AlignCenter))
+            self.table.setItem(r, 3, _cell(row.get("location_name") or "—"))
+            self.table.setItem(r, 4, _cell(row.get("notes") or ""))
+            self.table.setItem(r, 5, _cell(row.get("dealer_code") or "—"))
+
+
 # ── MAIN SCREEN ───────────────────────────────────────────────
 
 class SparePartsScreen(QWidget):
@@ -242,7 +309,7 @@ class SparePartsScreen(QWidget):
         fr.setSpacing(8)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search part name...")
+        self.search_input.setPlaceholderText("Search part name, model or colour...")
         self.search_input.setFixedHeight(36)
         self.search_input.setStyleSheet(_INPUT_STYLE)
         self.search_input.returnPressed.connect(self._search)
@@ -329,6 +396,10 @@ class SparePartsScreen(QWidget):
         lay.setContentsMargins(16, 16, 16, 16)
         lay.setSpacing(10)
 
+        hint = QLabel("Click a dealer name to see all spare parts sent to that dealer.")
+        hint.setStyleSheet("color:#64748b; font-size:12px;")
+        lay.addWidget(hint)
+
         self.dealer_status = QLabel("Loading…")
         self.dealer_status.setStyleSheet("color:#94a3b8; font-size:12px;")
         lay.addWidget(self.dealer_status)
@@ -344,7 +415,9 @@ class SparePartsScreen(QWidget):
         self.dealer_table.setAlternatingRowColors(True)
         self.dealer_table.verticalHeader().setVisible(False)
         self.dealer_table.setStyleSheet(_TABLE_STYLE)
+        self.dealer_table.cellClicked.connect(self._on_dealer_cell_clicked)
         lay.addWidget(self.dealer_table, 1)
+        self._dealer_rows_data = []
         return w
 
     # ── DATA LOADING ──────────────────────────────────────────
@@ -424,11 +497,26 @@ class SparePartsScreen(QWidget):
 
     def _populate_by_dealer(self, rows):
         self._by_dealer_loaded = True
+        self._dealer_rows_data = rows
         self.dealer_table.setRowCount(len(rows))
-        self.dealer_status.setText(f"{len(rows)} dealer(s)")
+        self.dealer_status.setText(f"{len(rows)} dealer(s) — click a name to view parts")
         for r, row in enumerate(rows):
-            self.dealer_table.setItem(r, 0, _cell(row["dealer_name"]))
+            name_item = QTableWidgetItem(row["dealer_name"])
+            name_item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            name_item.setForeground(QColor("#2563eb"))
+            font = name_item.font()
+            font.setUnderline(True)
+            name_item.setFont(font)
+            self.dealer_table.setItem(r, 0, name_item)
             self.dealer_table.setItem(r, 1, _cell(row["dealer_code"]))
             self.dealer_table.setItem(r, 2, _cell(row["unique_parts"], Qt.AlignmentFlag.AlignCenter))
             self.dealer_table.setItem(r, 3, _cell(row["total_qty"],    Qt.AlignmentFlag.AlignCenter))
             self.dealer_table.setItem(r, 4, _cell(row["last_dispatch"]))
+        self.dealer_table.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def _on_dealer_cell_clicked(self, row: int, col: int):
+        if col != 0 or row >= len(self._dealer_rows_data):
+            return
+        d = self._dealer_rows_data[row]
+        dlg = DealerSparePartsDialog(d["dealer_id"], d["dealer_name"], self)
+        dlg.exec()

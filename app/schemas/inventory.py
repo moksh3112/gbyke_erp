@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional
-from datetime import datetime, date
+from datetime import datetime
 
 _COLOUR_UNSET = "__COLOUR_UNSET__"
 

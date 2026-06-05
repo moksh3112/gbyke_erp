@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView,
     QPushButton, QDialog, QFormLayout, QLineEdit,
     QMessageBox, QAbstractItemView, QTabWidget,
-    QComboBox, QTextEdit, QSizePolicy
+    QComboBox, QTextEdit
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
@@ -116,14 +116,16 @@ class LoadUnitsWorker(QThread):
     done  = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, location_id: str):
+    def __init__(self, location_id: str, status: str = ""):
         super().__init__()
         self.location_id = location_id
+        self.status      = status
 
     def run(self):
         try:
+            qs = f"?status={self.status}" if self.status else ""
             self.done.emit(
-                APIClient.get(f"/warehouses/{self.location_id}/units")
+                APIClient.get(f"/warehouses/{self.location_id}/units{qs}")
             )
         except APIError as e:
             self.error.emit(e.message)
@@ -295,7 +297,9 @@ class UnitsTab(QWidget):
         self._status_filter.setFixedWidth(160)
         self._status_filter.setStyleSheet(INP)
         self._status_filter.addItem("All Statuses", "")
-        for val, (label, _, _) in STATUS_LABELS.items():
+        # A finished scooter in a warehouse is only ever Mfg Done or PDI Done.
+        for val in ("manufacturing_done", "pdi_done"):
+            label = STATUS_LABELS[val][0]
             self._status_filter.addItem(label, val)
         self._status_filter.currentIndexChanged.connect(self._load_data)
         top.addWidget(self._status_filter)
@@ -338,11 +342,7 @@ class UnitsTab(QWidget):
 
     def _load_data(self):
         status_val = self._status_filter.currentData() if hasattr(self, '_status_filter') else ""
-        endpoint = f"/warehouses/{self.location['id']}/units"
-        if status_val:
-            endpoint += f"?status={status_val}"
-
-        worker = LoadUnitsWorker(self.location["id"])
+        worker = LoadUnitsWorker(self.location["id"], status=status_val or "")
         worker.done.connect(self._on_loaded)
         worker.error.connect(
             lambda e: self._status_lbl.setText(f"Error: {e}")
@@ -686,17 +686,31 @@ class WarehousesScreen(QWidget):
         self._workers.append(sw)
         sw.start()
 
+        # PDI Done / Delivered are network-wide all-time metrics — delivered units
+        # no longer sit at any warehouse, so fetch them from the PDI summary.
+        class PDISummaryWorker(QThread):
+            done = pyqtSignal(dict)
+            def run(self):
+                try:
+                    self.done.emit(APIClient.get("/pdi/summary"))
+                except APIError:
+                    self.done.emit({})
+
+        pw = PDISummaryWorker()
+        pw.done.connect(self._on_pdi_summary)
+        self._workers.append(pw)
+        pw.start()
+
     def _on_summary(self, locations: list):
         self._all_locations = locations
-        n_loc      = len(locations)
-        n_units    = sum(loc.get("total_units", 0) for loc in locations)
-        n_pdi_done = sum(loc.get("pdi_done", 0)    for loc in locations)
-        n_delivered = sum(loc.get("delivered", 0)  for loc in locations)
-
+        n_loc   = len(locations)
+        n_units = sum(loc.get("total_units", 0) for loc in locations)
         _update_card(self.card_locations, n_loc)
         _update_card(self.card_units,     n_units)
-        _update_card(self.card_pdi_done,  n_pdi_done)
-        _update_card(self.card_delivered, n_delivered)
+
+    def _on_pdi_summary(self, data: dict):
+        _update_card(self.card_pdi_done,  data.get("pdi_done", 0))
+        _update_card(self.card_delivered, data.get("delivered", 0))
 
     def _open_location_tab(self, location: dict):
         """Open a drill-down tab for a specific location when View → is clicked."""

@@ -3,12 +3,13 @@ from PyQt6.QtWidgets import (
     QPushButton, QTableWidget, QTableWidgetItem,
     QLineEdit, QComboBox, QDialog, QFormLayout,
     QMessageBox, QHeaderView, QFrame,
-    QTextEdit, QAbstractItemView, QTabWidget, QMenu
+    QAbstractItemView, QTabWidget, QMenu, QCompleter
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint, QTimer
 from PyQt6.QtGui import QFont, QColor, QAction
 from desktop.utils.api_client import APIClient, APIError
 from desktop.utils.session import Session
+from desktop.screens.spare_parts import DealerSparePartsDialog
 
 
 # ── WORKERS ───────────────────────────────────────────────────
@@ -150,10 +151,34 @@ class LogDamageDialog(QDialog):
         super().__init__(parent)
         self.unit        = unit
         self.result_data = {}
+        self._bom_parts  = []
         self.setWindowTitle("Log Damage")
-        self.setFixedWidth(400)
+        self.setFixedWidth(440)
         self.setModal(True)
+        self._load_bom()
         self._build_ui()
+
+    def _load_bom(self):
+        names = []
+        seen  = set()
+
+        def _add(name):
+            n = (name or "").strip()
+            key = n.lower()
+            if n and key not in seen:
+                seen.add(key)
+                names.append(n)
+
+        # Only this model's BOM parts — general-part damage is logged separately
+        # via "Log Spare Part Damage".
+        model_id = self.unit.get("model_id")
+        if model_id:
+            try:
+                for b in APIClient.get(f"/manufacturing/bom/{model_id}"):
+                    _add(b.get("part_name") or b.get("item_name"))
+            except Exception:
+                pass
+        self._part_names = names
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -177,11 +202,22 @@ class LogDamageDialog(QDialog):
         form.setSpacing(10)
         form.setHorizontalSpacing(16)
 
-        self.part_input = QLineEdit()
-        self.part_input.setFixedHeight(34)
-        self.part_input.setPlaceholderText("e.g. Front fork, Battery, Mirror…")
-        self.part_input.setStyleSheet(inp)
-        form.addRow(QLabel("Part / Damage *"), self.part_input)
+        self.part_combo = QComboBox()
+        self.part_combo.setFixedHeight(34)
+        self.part_combo.setStyleSheet(inp)
+        self.part_combo.setEditable(True)
+        self.part_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.part_combo.lineEdit().setPlaceholderText("Type to search BOM parts…")
+        self.part_combo.addItem("", "")
+        for name in self._part_names:
+            self.part_combo.addItem(name, name)
+        # Type-ahead autocomplete over the BOM part list
+        completer = self.part_combo.completer()
+        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.part_combo.setCurrentIndex(0)
+        form.addRow(QLabel("Part *"), self.part_combo)
 
         self.stage_combo = QComboBox()
         self.stage_combo.setFixedHeight(34)
@@ -216,15 +252,130 @@ class LogDamageDialog(QDialog):
         layout.addLayout(btn_row)
 
     def _confirm(self):
-        part = self.part_input.text().strip()
+        # Editable combo — accept either a picked BOM part or free-typed text
+        part = self.part_combo.currentText().strip()
         if not part:
-            QMessageBox.warning(self, "Missing", "Please enter the part or damage description.")
+            QMessageBox.warning(self, "Missing", "Please select or type a part.")
             return
         self.result_data = {
             "scooter_unit_id": self.unit["id"],
             "stage":           self.stage_combo.currentData(),
             "part_name":       part,
             "notes":           self.notes_input.text().strip() or None,
+        }
+        self.accept()
+
+
+# ── LOG SPARE PART DAMAGE DIALOG ─────────────────────────────
+
+class LogSparePartDamageDialog(QDialog):
+    def __init__(self, parent, dealer):
+        super().__init__(parent)
+        self.dealer      = dealer
+        self.result_data = {}
+        self._parts      = []
+        self.setWindowTitle("Log Spare Part Damage")
+        self.setFixedWidth(440)
+        self.setModal(True)
+        self._load_parts()
+        self._build_ui()
+
+    def _load_parts(self):
+        try:
+            rows = APIClient.get(f"/spare-parts/dispatches?dealer_id={self.dealer['id']}")
+            seen = {}
+            for r in rows:
+                name = r.get("part_name", "")
+                if name and name not in seen:
+                    seen[name] = True
+                    self._parts.append(name)
+        except Exception:
+            pass
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+
+        title = QLabel("⚠️  Log Spare Part Damage")
+        title.setFont(QFont("Arial", 13, QFont.Weight.Bold))
+        title.setStyleSheet("color:#1e293b;")
+        layout.addWidget(title)
+
+        sub = QLabel(f"Dealer: {self.dealer.get('dealer_name', '—')}")
+        sub.setStyleSheet("color:#6b7280; font-size:12px;")
+        layout.addWidget(sub)
+
+        inp = "border:1px solid #ddd; border-radius:4px; padding:0 8px; color:#1a1a1a; background:white;"
+        form = QFormLayout()
+        form.setSpacing(10)
+        form.setHorizontalSpacing(16)
+
+        self.part_combo = QComboBox()
+        self.part_combo.setFixedHeight(34)
+        self.part_combo.setStyleSheet(inp)
+        self.part_combo.addItem("-- Select Part --", "")
+        for p in self._parts:
+            self.part_combo.addItem(p, p)
+        self.part_combo.addItem("Other (describe below)", "__other__")
+        self.part_combo.currentIndexChanged.connect(self._on_part_changed)
+        form.addRow(QLabel("Part *"), self.part_combo)
+
+        self.other_input = QLineEdit()
+        self.other_input.setFixedHeight(34)
+        self.other_input.setPlaceholderText("Describe the part…")
+        self.other_input.setStyleSheet(inp)
+        self.other_input.setVisible(False)
+        form.addRow(QLabel("Description *"), self.other_input)
+
+        self.notes_input = QLineEdit()
+        self.notes_input.setFixedHeight(34)
+        self.notes_input.setPlaceholderText("Describe the damage…")
+        self.notes_input.setStyleSheet(inp)
+        form.addRow(QLabel("Damage Notes *"), self.notes_input)
+
+        layout.addLayout(form)
+
+        btn_row = QHBoxLayout()
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setFixedHeight(36)
+        cancel_btn.setStyleSheet("border:1px solid #ddd; border-radius:6px; color:#666;")
+        cancel_btn.clicked.connect(self.reject)
+
+        confirm_btn = QPushButton("⚠️  Log Damage")
+        confirm_btn.setFixedHeight(36)
+        confirm_btn.setDefault(True)
+        confirm_btn.setStyleSheet(
+            "background:#dc2626; color:white; border:none; border-radius:6px; font-weight:600;"
+        )
+        confirm_btn.clicked.connect(self._confirm)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(confirm_btn)
+        layout.addLayout(btn_row)
+
+    def _on_part_changed(self, _):
+        self.other_input.setVisible(self.part_combo.currentData() == "__other__")
+
+    def _confirm(self):
+        selected = self.part_combo.currentData()
+        if not selected:
+            QMessageBox.warning(self, "Missing", "Please select a part.")
+            return
+        if selected == "__other__":
+            part = self.other_input.text().strip()
+            if not part:
+                QMessageBox.warning(self, "Missing", "Please describe the part.")
+                return
+        else:
+            part = selected
+        notes = self.notes_input.text().strip()
+        if not notes:
+            QMessageBox.warning(self, "Missing", "Please describe the damage.")
+            return
+        self.result_data = {
+            "part_name": part,
+            "notes":     notes,
+            "stage":     "dealer",
         }
         self.accept()
 
@@ -253,7 +404,7 @@ class DealerUnitsTab(QWidget):
         hdr.addStretch()
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍  Search serial, model or chassis...")
+        self.search_input.setPlaceholderText("🔍  Search serial, model, chassis or PDI no...")
         self.search_input.setFixedHeight(34)
         self.search_input.setFixedWidth(280)
         self.search_input.setStyleSheet(
@@ -315,6 +466,7 @@ class DealerUnitsTab(QWidget):
             or q in u.get("serial_number", "").lower()
             or q in (u.get("model_name") or "").lower()
             or q in (u.get("chassis_number") or "").lower()
+            or q in (u.get("pdi_number") or "").lower()
             or q in (u.get("color") or "").lower()
         ]
         self._render(filtered)
@@ -559,6 +711,16 @@ class DealersTab(QWidget):
         view_action.triggered.connect(lambda checked, d=dealer: self.view_dealer_requested.emit(d))
         menu.addAction(view_action)
 
+        parts_action = QAction("📦  View Spare Parts", self)
+        parts_action.triggered.connect(
+            lambda checked, d=dealer: DealerSparePartsDialog(d["id"], d["dealer_name"], self).exec()
+        )
+        menu.addAction(parts_action)
+
+        spare_dmg_action = QAction("⚠️  Log Spare Part Damage", self)
+        spare_dmg_action.triggered.connect(lambda checked, d=dealer: self._log_spare_part_damage(d))
+        menu.addAction(spare_dmg_action)
+
         if Session.role in ["superadmin", "manager"]:
             edit_action = QAction("✏️   Edit Dealer", self)
             edit_action.triggered.connect(lambda checked, d=dealer: self._edit_dealer(d))
@@ -581,6 +743,19 @@ class DealersTab(QWidget):
         pos = btn.mapToGlobal(QPoint(0, btn.height()))
         menu.exec(pos)
         QTimer.singleShot(0, lambda: None)
+
+    def _log_spare_part_damage(self, dealer):
+        dlg = LogSparePartDamageDialog(self, dealer)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            try:
+                payload = {**dlg.result_data, "dealer_id": dealer["id"]}
+                APIClient.post("/damage-log/spare-part-damage", payload)
+                QMessageBox.information(
+                    self, "Logged",
+                    f"Spare part damage recorded for {dealer['dealer_name']}."
+                )
+            except APIError as e:
+                QMessageBox.critical(self, "Error", e.message)
 
     def _add_dealer(self):
         dlg = DealerDialog(self)

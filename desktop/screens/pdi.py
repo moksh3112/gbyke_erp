@@ -11,7 +11,6 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 from desktop.utils.api_client import APIClient, APIError
-from desktop.utils.session import Session
 
 
 # ── SHARED HELPERS (match ManufacturingScreen exactly) ────────────────────────
@@ -103,6 +102,17 @@ class PDIWorker(QThread):
         try:
             data = APIClient.get("/pdi/pending")
             self.finished.emit(data if data else [])
+        except APIError as e:
+            self.error.emit(str(e))
+
+
+class PDISummaryWorker(QThread):
+    finished = pyqtSignal(dict)
+    error    = pyqtSignal(str)
+
+    def run(self):
+        try:
+            self.finished.emit(APIClient.get("/pdi/summary"))
         except APIError as e:
             self.error.emit(str(e))
 
@@ -563,5 +573,21 @@ class PDIScreen(QWidget):
         self._units_tab.units_loaded.connect(
             lambda n: _update_card(self.card_awaiting, n)
         )
+        # Reload the all-time counts whenever the pending list changes
+        self._units_tab.units_loaded.connect(lambda _: self._load_summary())
         tabs.addTab(self._units_tab, "⏳  Awaiting Inspection")
         layout.addWidget(tabs)
+
+        self._load_summary()
+
+    def _load_summary(self):
+        worker = PDISummaryWorker()
+        worker.finished.connect(self._on_summary)
+        worker.error.connect(lambda e: None)
+        self._workers.append(worker)
+        worker.start()
+
+    def _on_summary(self, data: dict):
+        _update_card(self.card_awaiting,  data.get("awaiting", 0))
+        _update_card(self.card_done,      data.get("pdi_done", 0))
+        _update_card(self.card_delivered, data.get("delivered", 0))

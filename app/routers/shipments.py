@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import func
 from typing import List, Optional
 from pydantic import BaseModel
@@ -138,7 +138,11 @@ def list_dispatch_notes(
     db:         Session = Depends(get_db),
     current_user: User  = Depends(require_any_role),
 ):
-    q = db.query(DispatchNote)
+    q = db.query(DispatchNote).options(
+        joinedload(DispatchNote.dealer),
+        selectinload(DispatchNote.scooters),
+        selectinload(DispatchNote.parts),
+    )
     if dealer_id:
         q = q.filter(DispatchNote.dealer_id == dealer_id)
     if from_date:
@@ -155,7 +159,11 @@ def get_dispatch_note(
     db:           Session = Depends(get_db),
     current_user: User    = Depends(require_any_role),
 ):
-    note = db.query(DispatchNote).filter(DispatchNote.id == note_id).first()
+    note = db.query(DispatchNote).options(
+        joinedload(DispatchNote.dealer),
+        selectinload(DispatchNote.scooters).joinedload(DispatchNoteScooter.scooter_unit).joinedload(ScooterUnit.model),
+        selectinload(DispatchNote.parts),
+    ).filter(DispatchNote.id == note_id).first()
     if not note:
         raise HTTPException(404, "Dispatch note not found.")
     return _note_to_detail(note)

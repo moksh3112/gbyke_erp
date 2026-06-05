@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QComboBox, QDialog, QFormLayout,
     QSpinBox, QMessageBox, QHeaderView, QFrame,
     QTextEdit, QAbstractItemView, QTabWidget,
-    QTreeWidget, QTreeWidgetItem, QSizePolicy, QMenu
+    QTreeWidget, QTreeWidgetItem, QMenu
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QPoint
 from PyQt6.QtGui import QFont, QColor, QAction
@@ -71,9 +71,9 @@ class LoadSummaryWorker(QThread):
 class AddBOMItemDialog(QDialog):
     def __init__(self, parent, model_id, model_name, model_code=""):
         super().__init__(parent)
-        self.model_id   = model_id
-        self.model_name = model_name
-        self.model_code = model_code   # ← used for SKU preview
+        self.model_id    = model_id
+        self.model_name  = model_name
+        self.model_code  = model_code
         self.result_data = {}
         self.setWindowTitle(f"Add BOM Part — {model_name}")
         self.setFixedWidth(500)

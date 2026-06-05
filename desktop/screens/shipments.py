@@ -4,11 +4,11 @@ from PyQt6.QtWidgets import (
     QLineEdit, QComboBox, QDialog, QFormLayout,
     QMessageBox, QHeaderView, QFrame,
     QTextEdit, QAbstractItemView, QTabWidget,
-    QSpinBox, QDateEdit, QMenu, QSizePolicy,
+    QSpinBox, QDateEdit, QSizePolicy,
     QScrollArea
 )
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDate, QPoint, QTimer
-from PyQt6.QtGui import QFont, QColor, QAction
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDate
+from PyQt6.QtGui import QFont, QColor
 from desktop.utils.api_client import APIClient, APIError
 from desktop.utils.session import Session
 
@@ -107,11 +107,10 @@ class CreateDispatchDialog(QDialog):
         self.dealers       = dealers
         self.result_data   = {}
         self.workers       = []
-        self._models       = []    # [{id, model_name, model_code}]
-        self._batteries    = []    # [{id, name}]
-        self._scooter_rows = []
-        self._part_rows    = []    # structured part rows
-        self._battery_rows = []    # battery rows
+        self._models        = []    # [{id, model_name, model_code}]
+        self._general_parts = []    # [{id, part_name, sku}]
+        self._scooter_rows  = []
+        self._part_rows     = []    # structured part rows
         self.setWindowTitle("New Dispatch")
         self.setFixedWidth(780)
         self.setMinimumHeight(580)
@@ -215,14 +214,6 @@ class CreateDispatchDialog(QDialog):
         )
         add_part_btn.clicked.connect(self._add_part_row)
         parts_btn_row.addWidget(add_part_btn)
-
-        add_battery_btn = QPushButton("🔋 Add Battery")
-        add_battery_btn.setFixedHeight(30)
-        add_battery_btn.setStyleSheet(
-            "border:1px solid #f59e0b; color:#b45309; border-radius:4px; font-size:12px; padding:0 10px;"
-        )
-        add_battery_btn.clicked.connect(self._add_battery_row)
-        parts_btn_row.addWidget(add_battery_btn)
         parts_btn_row.addStretch()
 
         layout.addLayout(parts_btn_row)
@@ -345,9 +336,9 @@ class CreateDispatchDialog(QDialog):
         except APIError:
             self._models = []
         try:
-            self._batteries = APIClient.get("/master/batteries")
+            self._general_parts = APIClient.get("/master/general-parts")
         except APIError:
-            self._batteries = []
+            self._general_parts = []
         # Pre-load all inventory items keyed by name and SKU for matching
         self._inv_by_name = {}
         self._inv_by_sku  = {}
@@ -423,10 +414,11 @@ class CreateDispatchDialog(QDialog):
         model_combo = self._make_combo()
         model_combo.setFixedWidth(160)
         model_combo.addItem("-- Model --", "")
+        model_combo.addItem("⚙  General / No Specific Model", "GEN")
         for m in self._models:
             model_combo.addItem(m["model_name"], m["id"])
 
-        # Part combo (loaded from BOM when model selected)
+        # Part combo (loaded from BOM or general parts when model selected)
         part_combo = self._make_combo()
         part_combo.setFixedWidth(160)
         part_combo.addItem("-- Select Part --", None)
@@ -461,14 +453,24 @@ class CreateDispatchDialog(QDialog):
             model_id = mc.currentData()
             pc.clear()
             pc.addItem("-- Select Part --", None)
+            lc.clear()
+            lc.addItem("-- Location --", None)
             if not model_id:
+                return
+            if model_id == "GEN":
+                for gp in dlg._general_parts:
+                    name   = gp.get("part_name", "")
+                    sku    = gp.get("sku", "").strip().lower()
+                    inv_id = (dlg._inv_by_sku.get(sku) or {}).get("id")
+                    if name:
+                        label = f"{name}  [{gp.get('sku', '')}]"
+                        pc.addItem(label, inv_id)
                 return
             try:
                 bom = APIClient.get(f"/manufacturing/bom/{model_id}")
                 for item in bom:
                     name = item.get("part_name") or item.get("item_name", "")
                     inv_id = item.get("inventory_item_id")
-                    # BOM item may not be explicitly linked — fall back to name/SKU match
                     if not inv_id:
                         sku = item.get("sku", "")
                         matched = (
@@ -479,8 +481,6 @@ class CreateDispatchDialog(QDialog):
                             inv_id = matched.get("id")
                     if name:
                         pc.addItem(name, inv_id)
-                lc.clear()
-                lc.addItem("-- Location --", None)
             except APIError:
                 pass
 
@@ -506,62 +506,9 @@ class CreateDispatchDialog(QDialog):
 
         self.parts_layout.addWidget(row_widget)
 
-    def _add_battery_row(self):
-        row_widget = QWidget()
-        row_layout = QHBoxLayout(row_widget)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(6)
-
-        battery_lbl = QLabel("🔋")
-        battery_lbl.setStyleSheet("font-size:14px;")
-        row_layout.addWidget(battery_lbl)
-
-        battery_combo = self._make_combo()
-        battery_combo.setMinimumWidth(200)
-        battery_combo.addItem("-- Select Battery --", None)
-        for b in self._batteries:
-            label = f"{b.get('battery_type', '')}  {b.get('power_spec', '')}".strip()
-            inv_item = self._inv_by_name.get(label.lower())
-            inv_id = inv_item.get("id") if inv_item else None
-            battery_combo.addItem(label, inv_id)
-
-        bat_loc_combo = self._make_combo()
-        bat_loc_combo.setFixedWidth(160)
-        bat_loc_combo.addItem("-- Location --", None)
-
-        def on_battery_changed(index, bc=battery_combo, lc=bat_loc_combo, dlg=self):
-            inv_id = bc.currentData()
-            dlg._load_locations_for_item(inv_id, lc)
-
-        battery_combo.currentIndexChanged.connect(on_battery_changed)
-
-        qty_spin = self._make_spinbox()
-
-        row_data = {"battery_combo": battery_combo, "loc_combo": bat_loc_combo, "qty": qty_spin, "type": "battery"}
-        self._battery_rows.append(row_data)
-
-        remove_btn = self._make_remove_btn()
-        remove_btn.clicked.connect(lambda _, rw=row_widget, rd=row_data: self._remove_battery_row(rw, rd))
-
-        row_layout.addWidget(battery_combo, 1)
-        row_layout.addWidget(bat_loc_combo)
-        qty_lbl = QLabel("Qty:")
-        qty_lbl.setStyleSheet("color:#374151; font-size:12px;")
-        row_layout.addWidget(qty_lbl)
-        row_layout.addWidget(qty_spin)
-        row_layout.addWidget(remove_btn)
-
-        self.parts_layout.addWidget(row_widget)
-
     def _remove_part_row(self, row_widget, row_data):
         if row_data in self._part_rows:
             self._part_rows.remove(row_data)
-        row_widget.setParent(None)
-        row_widget.deleteLater()
-
-    def _remove_battery_row(self, row_widget, row_data):
-        if row_data in self._battery_rows:
-            self._battery_rows.remove(row_data)
         row_widget.setParent(None)
         row_widget.deleteLater()
 
@@ -613,27 +560,6 @@ class CreateDispatchDialog(QDialog):
                 "quantity":          pd["qty"].value(),
                 "inventory_item_id": inv_id,
                 "location_id":       pd["loc_combo"].currentData(),
-                "notes":             None,
-            })
-
-        for bd in self._battery_rows:
-            battery = bd["battery_combo"].currentText().strip()
-            inv_id  = bd["battery_combo"].currentData()
-            if not battery or battery == "-- Select Battery --":
-                QMessageBox.warning(self, "Missing", "Please select a battery type for all battery rows.")
-                return
-            if not inv_id:
-                QMessageBox.warning(
-                    self, "Not in Inventory",
-                    f"Battery '{battery}' was not found in inventory.\n"
-                    "Add it to inventory first before dispatching."
-                )
-                return
-            parts.append({
-                "part_name":         f"Battery — {battery}",
-                "quantity":          bd["qty"].value(),
-                "inventory_item_id": inv_id,
-                "location_id":       bd["loc_combo"].currentData(),
                 "notes":             None,
             })
 
@@ -824,6 +750,8 @@ class ShipmentsScreen(QWidget):
 
         self.dealer_filter = QComboBox()
         self.dealer_filter.setFixedHeight(34)
+        self.dealer_filter.setMinimumWidth(220)
+        self.dealer_filter.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.dealer_filter.setStyleSheet(
             "border:1px solid #ddd; border-radius:6px; padding:0 8px; color:#1a1a1a; background:white;"
         )

@@ -1,18 +1,19 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
-from sqlalchemy import func, case
+from sqlalchemy import func
 from typing import Optional
 
 from app.database import get_db
 from app.core.dependencies import require_any_role
 from app.models import (
-    InventoryItem, InventoryCategory, StockMovement,
+    InventoryItem, StockMovement,
     ScooterUnit, VehicleStatus,
-    AssemblyJob, AssemblyStatus, ScooterModel,
-    DispatchNote, DispatchNoteScooter, DispatchNotePart, Dealer,
-    PDIRecord, User,
-    DamageRecord, DamageStage,
+    AssemblyJob, AssemblyStatus, ScooterModel, BOMItem,
+    DispatchNote,
+    PDIRecord, PDIResult, User,
+    DamageRecord, Location,
 )
+from fastapi import HTTPException
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
@@ -35,24 +36,92 @@ def inventory_report(
         if (i.remaining_quantity or 0) <= (i.low_stock_threshold or 0)
     )
 
-    # By category
-    by_category = {}
-    for item in items:
-        cat_name = item.category.name if item.category else "Uncategorised"
-        if cat_name not in by_category:
-            by_category[cat_name] = {"items": 0, "remaining": 0, "consumed": 0}
-        by_category[cat_name]["items"]     += 1
-        by_category[cat_name]["remaining"] += item.remaining_quantity  or 0
-        by_category[cat_name]["consumed"]  += item.consumed_quantity   or 0
+    # Max buildable per model
+    models = db.query(ScooterModel).filter(ScooterModel.is_active == True).all()
+    buildable_rows = []
+    for model in models:
+        bom_all = model.bom_items
+
+        if not bom_all:
+            buildable_rows.append({
+                "model_name":      model.model_name,
+                "max_buildable":   "—",
+                "bottleneck_part": "No BOM defined",
+                "stock":           "—",
+                "needed_per_unit": "—",
+                "severity":        "none",
+            })
+            continue
+
+        # Resolve inventory item for each BOM entry using same logic as manufacturing:
+        # direct ID → SKU match → exact name → partial name
+        def _resolve(b: BOMItem):
+            if b.inventory_item_id:
+                i = db.query(InventoryItem).filter(InventoryItem.id == b.inventory_item_id).first()
+                if i:
+                    return i
+            if b.sku:
+                i = db.query(InventoryItem).filter(
+                    InventoryItem.sku == b.sku, InventoryItem.is_active == True
+                ).first()
+                if i:
+                    return i
+            if b.part_name:
+                i = db.query(InventoryItem).filter(
+                    InventoryItem.item_name == b.part_name, InventoryItem.is_active == True
+                ).first()
+                if i:
+                    return i
+                i = db.query(InventoryItem).filter(
+                    InventoryItem.item_name.ilike(f"%{b.part_name}%"), InventoryItem.is_active == True
+                ).first()
+                if i:
+                    return i
+            return None
+
+        ratios = []
+        for b in bom_all:
+            inv_item  = _resolve(b)
+            qty_needed = b.quantity_required or 1
+            qty_have   = (inv_item.remaining_quantity or 0) if inv_item else 0
+            display    = (inv_item.item_name if inv_item else None) or b.part_name or "Unknown"
+            ratios.append((qty_have // qty_needed, b, qty_have, qty_needed, display))
+
+        if not ratios:
+            buildable_rows.append({
+                "model_name":      model.model_name,
+                "max_buildable":   "—",
+                "bottleneck_part": "Parts not linked to inventory",
+                "stock":           "—",
+                "needed_per_unit": "—",
+                "severity":        "none",
+            })
+            continue
+
+        ratios.sort(key=lambda x: x[0])
+        max_build, bottleneck_bom, have, need, part_name = ratios[0]
+
+        # Severity: red <5, orange <20, green otherwise
+        severity = "critical" if max_build < 5 else ("warning" if max_build < 20 else "ok")
+
+        buildable_rows.append({
+            "model_name":      model.model_name,
+            "max_buildable":   int(max_build),
+            "bottleneck_part": part_name,
+            "stock":           int(have),
+            "needed_per_unit": int(need),
+            "severity":        severity,
+        })
+
+    buildable_rows.sort(key=lambda x: (x["max_buildable"] == "—", x["max_buildable"] if x["max_buildable"] != "—" else 999))
 
     # Low stock items
     low_stock = [
         {
-            "item_name":      i.item_name,
-            "sku":            i.sku or "—",
-            "remaining":      i.remaining_quantity  or 0,
-            "threshold":      i.low_stock_threshold or 0,
-            "category":       i.category.name if i.category else "—",
+            "item_name":  i.item_name,
+            "sku":        i.sku or "—",
+            "remaining":  i.remaining_quantity  or 0,
+            "threshold":  i.low_stock_threshold or 0,
         }
         for i in items
         if (i.remaining_quantity or 0) <= (i.low_stock_threshold or 0)
@@ -66,9 +135,7 @@ def inventory_report(
             "total_defective": total_defective,
             "low_stock_count": low_stock_count,
         },
-        "by_category": [
-            {"category": k, **v} for k, v in sorted(by_category.items())
-        ],
+        "buildable": buildable_rows,
         "low_stock_items": sorted(low_stock, key=lambda x: x["remaining"]),
     }
 
@@ -92,21 +159,20 @@ def manufacturing_report(
     total_jobs      = len(jobs)
     completed       = sum(1 for j in jobs if j.status == AssemblyStatus.completed)
     cancelled       = sum(1 for j in jobs if j.status == AssemblyStatus.cancelled)
-    total_assembled = sum(j.quantity         or 0 for j in jobs if j.status == AssemblyStatus.completed)
-    total_damaged   = sum(j.damaged_quantity or 0 for j in jobs)
+    total_assembled = sum(j.quantity or 0 for j in jobs if j.status == AssemblyStatus.completed)
+    total_damaged   = 0
 
     # By model
     by_model = {}
     for j in jobs:
         name = j.model.model_name if j.model else "Unknown"
         if name not in by_model:
-            by_model[name] = {"jobs": 0, "assembled": 0, "damaged": 0, "cancelled": 0}
+            by_model[name] = {"jobs": 0, "assembled": 0, "cancelled": 0}
         by_model[name]["jobs"] += 1
         if j.status == AssemblyStatus.completed:
             by_model[name]["assembled"] += j.quantity or 0
         if j.status == AssemblyStatus.cancelled:
             by_model[name]["cancelled"] += 1
-        by_model[name]["damaged"] += j.damaged_quantity or 0
 
     return {
         "summary": {
@@ -117,7 +183,7 @@ def manufacturing_report(
             "total_damaged":   total_damaged,
         },
         "by_model": [
-            {"model": k, **v} for k, v in sorted(by_model.items())
+            {"model": k, "damaged": 0, **v} for k, v in sorted(by_model.items())
         ],
     }
 
@@ -192,11 +258,23 @@ def pdi_damage_report(
         pdi_q = pdi_q.filter(PDIRecord.completed_at <= to_date + " 23:59:59")
     pdi_records = pdi_q.all()
 
-    total_pdi    = len(pdi_records)
-    pdi_passed   = sum(1 for p in pdi_records if p.result == "pass")
-    pdi_failed   = sum(1 for p in pdi_records if p.result == "fail")
+    pdi_failed   = sum(1 for p in pdi_records if p.result == PDIResult.failed)
+
+    # Completed/passed are derived from unit status so historical units
+    # (passed PDI before PDIRecords were tracked) are still counted.
+    # A delivered unit has, by definition, already passed PDI.
+    pdi_passed = db.query(func.count(ScooterUnit.id)).filter(
+        ScooterUnit.status.in_([VehicleStatus.pdi_done, VehicleStatus.delivered])
+    ).scalar() or 0
+    total_pdi = pdi_passed + pdi_failed
+
+    # "Pending PDI" = anything awaiting inspection (matches the PDI screen).
     pdi_pending  = db.query(func.count(ScooterUnit.id)).filter(
-        ScooterUnit.status == VehicleStatus.pdi_pending
+        ScooterUnit.status.in_([
+            VehicleStatus.manufacturing_done,
+            VehicleStatus.pdi_pending,
+            VehicleStatus.pdi_in_progress,
+        ])
     ).scalar() or 0
 
     # Scooter status breakdown
@@ -243,4 +321,94 @@ def pdi_damage_report(
             for k, v in sorted(by_stage.items())
         ],
         "inventory_damage_qty": int(inv_dmg),
+    }
+
+
+# ── FINISHED GOODS ────────────────────────────────────────────
+
+# Finished = built scooters still in our inventory (everything except delivered).
+_FINISHED_STATUSES = [
+    VehicleStatus.manufacturing_done,
+    VehicleStatus.pdi_pending,
+    VehicleStatus.pdi_in_progress,
+    VehicleStatus.pdi_done,
+]
+
+
+@router.get("/finished-goods")
+def finished_goods_report(
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_any_role),
+):
+    """Count of finished scooters in inventory, grouped by model."""
+    rows = (
+        db.query(
+            ScooterModel.id,
+            ScooterModel.model_name,
+            func.count(ScooterUnit.id),
+        )
+        .join(ScooterUnit, ScooterUnit.model_id == ScooterModel.id)
+        .filter(ScooterUnit.status.in_(_FINISHED_STATUSES))
+        .group_by(ScooterModel.id, ScooterModel.model_name)
+        .order_by(ScooterModel.model_name)
+        .all()
+    )
+    models = [
+        {"model_id": mid, "model_name": name, "count": int(cnt)}
+        for mid, name, cnt in rows
+    ]
+    return {
+        "total":  sum(m["count"] for m in models),
+        "models": models,
+    }
+
+
+@router.get("/finished-goods/{model_id}")
+def finished_goods_detail(
+    model_id:     str,
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_any_role),
+):
+    """Colour-wise breakdown + unit details for one model's finished stock."""
+    model = db.query(ScooterModel).filter(ScooterModel.id == model_id).first()
+    if not model:
+        raise HTTPException(404, "Model not found.")
+
+    units = (
+        db.query(ScooterUnit)
+        .filter(
+            ScooterUnit.model_id == model_id,
+            ScooterUnit.status.in_(_FINISHED_STATUSES),
+        )
+        .order_by(ScooterUnit.color, ScooterUnit.serial_number)
+        .all()
+    )
+
+    # Batch-fetch location names
+    loc_ids = {u.current_location_id for u in units if u.current_location_id}
+    loc_names = {}
+    if loc_ids:
+        for loc in db.query(Location).filter(Location.id.in_(loc_ids)).all():
+            loc_names[loc.id] = loc.name
+
+    by_color: dict = {}
+    for u in units:
+        color = u.color or "—"
+        by_color.setdefault(color, []).append({
+            "serial_number": u.serial_number or "—",
+            "color":         color,
+            "pdi_number":    u.pdi_number or "—",
+            "pdi_status":    u.status.value if u.status else "—",
+            "location":      loc_names.get(u.current_location_id, "—"),
+        })
+
+    colors = [
+        {"color": c, "count": len(us), "units": us}
+        for c, us in sorted(by_color.items())
+    ]
+    return {
+        "model_id":   model_id,
+        "model_name": model.model_name,
+        "total":      len(units),
+        "colors":     colors,
     }

@@ -3,9 +3,9 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.database import get_db
 from app.core.dependencies import (
-    require_any_role, require_manager_or_above, require_superadmin
+    require_any_role, require_manager_or_above
 )
-from app.models import ScooterModel, MasterColor, MasterBattery, Location, User
+from app.models import ScooterModel, MasterColor, MasterBattery, Location, User, BOMItem, InventoryItem
 from app.schemas.models import (
     ScooterModelCreate, ScooterModelUpdate, ScooterModelResponse,
     MasterColorCreate, MasterColorResponse,
@@ -18,13 +18,45 @@ router = APIRouter(prefix="/master", tags=["Master Data"])
 
 # ── SCOOTER MODELS ────────────────────────────────────────────
 
+@router.get("/general-parts-model-id")
+def get_general_parts_model_id(
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_any_role),
+):
+    gen = db.query(ScooterModel).filter(ScooterModel.model_code == "GEN").first()
+    if not gen:
+        raise HTTPException(404, "General Parts model not found — restart the server.")
+    return {"model_id": gen.id}
+
+
+@router.get("/general-parts")
+def get_general_parts(
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_any_role),
+):
+    gen_model = db.query(ScooterModel).filter(ScooterModel.model_code == "GEN").first()
+    if not gen_model:
+        return []
+    parts = db.query(BOMItem).filter(BOMItem.model_id == gen_model.id).all()
+    result = []
+    for b in parts:
+        inv = db.query(InventoryItem).filter(InventoryItem.id == b.inventory_item_id).first() if b.inventory_item_id else None
+        result.append({
+            "id":       b.id,
+            "part_name": b.part_name or (inv.item_name if inv else "—"),
+            "sku":      b.sku or "",
+            "notes":    b.notes or "",
+        })
+    return result
+
+
 @router.get("/models", response_model=List[ScooterModelResponse])
 def get_models(
     db:           Session = Depends(get_db),
     current_user: User    = Depends(require_any_role),
     active_only:  bool    = True
 ):
-    query = db.query(ScooterModel)
+    query = db.query(ScooterModel).filter(ScooterModel.model_code != "GEN")
     if active_only:
         query = query.filter(ScooterModel.is_active == True)
     return query.order_by(ScooterModel.model_name).all()

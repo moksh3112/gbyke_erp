@@ -3,10 +3,10 @@ from PyQt6.QtWidgets import (
     QPushButton, QTableWidget, QTableWidgetItem,
     QHeaderView, QFrame, QTabWidget,
     QAbstractItemView, QDateEdit, QSizePolicy,
-    QScrollArea,
+    QScrollArea, QTreeWidget, QTreeWidgetItem,
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal, QDate
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QColor
 from desktop.utils.api_client import APIClient, APIError
 
 
@@ -35,7 +35,7 @@ class ReportWorker(QThread):
 _TABLE_STYLE = """
     QTableWidget {
         border: none; font-size: 13px;
-        gridline-color: #f1f5f9; outline: none;
+        gridline-color: #f1f5f9; outline: none; color: #1a1a1a;
     }
     QHeaderView::section {
         background: #f8fafc; color: #374151;
@@ -43,12 +43,12 @@ _TABLE_STYLE = """
         padding: 8px 8px; border: none;
         border-bottom: 2px solid #e2e8f0;
     }
-    QTableWidget::item { padding: 8px 6px; border: none; }
-    QTableWidget::item:alternate { background: #fafafa; }
+    QTableWidget::item { padding: 8px 6px; border: none; color: #1a1a1a; }
+    QTableWidget::item:alternate { background: #fafafa; color: #1a1a1a; }
     QTableWidget::item:selected { background: #eff6ff; color: #1e293b; }
 """
 
-_DATE_STYLE  = "border:1px solid #d1d5db; border-radius:6px; padding:0 6px; font-size:13px; background:white;"
+_DATE_STYLE  = "border:1px solid #d1d5db; border-radius:6px; padding:0 6px; font-size:13px; background:white; color:#1a1a1a;"
 _LABEL_STYLE = "color:#374151; font-size:12px;"
 
 
@@ -179,6 +179,132 @@ def _status_lbl() -> QLabel:
     return lbl
 
 
+_TREE_STYLE = """
+    QTreeWidget {
+        border: 1px solid #e5e7eb; border-radius: 8px;
+        font-size: 13px; outline: none; color: #1a1a1a; background: white;
+    }
+    QHeaderView::section {
+        background: #f8fafc; color: #374151;
+        font-weight: 600; font-size: 12px;
+        padding: 10px 8px; border: none;
+        border-bottom: 2px solid #e2e8f0;
+    }
+    QTreeWidget::item { padding: 8px 4px; color: #1a1a1a; min-height: 22px; }
+    QTreeWidget::item:hover { background: #f8fafc; }
+    QTreeWidget::item:selected { background: #eff6ff; color: #1e293b; }
+"""
+
+# PDI / build status → (label, colour)
+_PDI_STATUS_LABELS = {
+    "manufacturing_done": ("Mfg Done",        "#92400e"),
+    "pdi_pending":        ("PDI Pending",     "#1d4ed8"),
+    "pdi_in_progress":    ("PDI In Progress", "#166534"),
+    "pdi_done":           ("PDI Done ✓",      "#15803d"),
+    "delivered":          ("Delivered",       "#7c3aed"),
+}
+
+
+class FinishedGoodsModelTab(QWidget):
+    """Colour-wise finished-goods breakdown for one model, with expandable unit details."""
+
+    def __init__(self, model_id: str, model_name: str, parent=None):
+        super().__init__(parent)
+        self.model_id   = model_id
+        self.model_name = model_name
+        self.workers    = []
+        self._build_ui()
+        self._load()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(20, 16, 20, 16)
+        lay.setSpacing(10)
+
+        title = QLabel(f"🛵  {self.model_name} — Finished Goods by Colour")
+        title.setFont(QFont("Arial", 13, QFont.Weight.Bold))
+        title.setStyleSheet("color:#1e293b;")
+        lay.addWidget(title)
+
+        hint = QLabel("Click the ▸ arrow on a colour to see individual scooter details.")
+        hint.setStyleSheet("color:#64748b; font-size:12px;")
+        lay.addWidget(hint)
+
+        self.status = QLabel("Loading…")
+        self.status.setStyleSheet("color:#94a3b8; font-size:12px;")
+        lay.addWidget(self.status)
+
+        self.tree = QTreeWidget()
+        self.tree.setColumnCount(6)
+        self.tree.setHeaderLabels(
+            ["Colour / Serial No.", "Model", "Colour", "PDI No.", "PDI Status", "Location"]
+        )
+        self.tree.setAlternatingRowColors(False)
+        self.tree.setIndentation(20)
+        self.tree.setRootIsDecorated(True)
+        self.tree.setStyleSheet(_TREE_STYLE)
+        hh = self.tree.header()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for c in (1, 2, 3, 4, 5):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeMode.ResizeToContents)
+        lay.addWidget(self.tree, 1)
+
+    def _load(self):
+        w = ReportWorker(f"finished-goods/{self.model_id}")
+        w.done.connect(self._populate)
+        w.error.connect(lambda e: self.status.setText(f"Error: {e}"))
+        self.workers.append(w)
+        w.start()
+
+    def _populate(self, data):
+        colors = data.get("colors", [])
+        total  = data.get("total", 0)
+        self.status.setText(
+            f"{total} finished unit(s) across {len(colors)} colour(s)"
+        )
+        self.tree.clear()
+        for c in colors:
+            parent = QTreeWidgetItem([
+                f"{c['color']}    ({c['count']} unit{'s' if c['count'] != 1 else ''})",
+                "", "", "", "", ""
+            ])
+            pf = parent.font(0)
+            pf.setBold(True)
+            pf.setPointSize(pf.pointSize() + 1)
+            parent.setFont(0, pf)
+            # Shaded header band for the colour group
+            for col in range(6):
+                parent.setBackground(col, QColor("#eef2f7"))
+            parent.setForeground(0, QColor("#0e7490"))
+            self.tree.addTopLevelItem(parent)
+
+            for i, u in enumerate(c["units"]):
+                label, color = _PDI_STATUS_LABELS.get(
+                    u["pdi_status"], (u["pdi_status"], "#374151")
+                )
+                child = QTreeWidgetItem([
+                    u["serial_number"],
+                    self.model_name,
+                    u["color"],
+                    u["pdi_number"],
+                    label,
+                    u["location"],
+                ])
+                # Centre the PDI no. / status columns; status bold + coloured
+                child.setTextAlignment(3, Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+                child.setTextAlignment(4, Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
+                sf = child.font(4)
+                sf.setBold(True)
+                child.setFont(4, sf)
+                child.setForeground(4, QColor(color))
+                child.setForeground(0, QColor("#475569"))
+                if i % 2 == 1:
+                    for col in range(6):
+                        child.setBackground(col, QColor("#fafafa"))
+                parent.addChild(child)
+            parent.setExpanded(True)
+
+
 # ── MAIN SCREEN ───────────────────────────────────────────────
 
 class ReportsScreen(QWidget):
@@ -214,13 +340,19 @@ class ReportsScreen(QWidget):
                 font-weight: 600; border-bottom-color: white;
             }
         """)
-        self.tabs.addTab(self._build_inventory_tab(),   "📦  Inventory")
-        self.tabs.addTab(self._build_production_tab(),  "🏭  Production")
-        self.tabs.addTab(self._build_dispatch_tab(),    "🚚  Dispatch")
-        self.tabs.addTab(self._build_pdi_tab(),         "🔍  PDI & Damage")
+        self._tab_inventory = self._build_inventory_tab()
+        self._tab_finished  = self._build_finished_goods_tab()
+        self._tab_production = self._build_production_tab()
+        self._tab_dispatch  = self._build_dispatch_tab()
+        self._tab_pdi       = self._build_pdi_tab()
+        self.tabs.addTab(self._tab_inventory,  "📦  Inventory")
+        self.tabs.addTab(self._tab_finished,   "🛵  Finished Goods")
+        self.tabs.addTab(self._tab_production, "🏭  Production")
+        self.tabs.addTab(self._tab_dispatch,   "🚚  Dispatch")
+        self.tabs.addTab(self._tab_pdi,        "🔍  PDI & Damage")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs, 1)
 
-        # Auto-run first tab
         self._run_inventory()
 
     # ── INVENTORY TAB ─────────────────────────────────────────
@@ -230,28 +362,28 @@ class ReportsScreen(QWidget):
         lay = scroll
 
         btn = _run_btn(self._run_inventory, "#2563eb")
-        brow = QHBoxLayout()
-        brow.addWidget(btn)
-        brow.addStretch()
-        lay.addLayout(brow)
+        self._inv_btn_lay = QHBoxLayout()
+        self._inv_btn_lay.addWidget(btn)
+        self._inv_btn_lay.addStretch()
+        lay.addLayout(self._inv_btn_lay)
 
         self._inv_kpi = QWidget()
         lay.addWidget(self._inv_kpi)
 
-        lay.addWidget(_section_title("By Category"))
-        self._inv_cat_status = _status_lbl()
-        lay.addWidget(self._inv_cat_status)
-        self._inv_cat_table = _make_table(
-            ["Category", "Items", "Remaining Stock", "Consumed"]
+        lay.addWidget(_section_title("🏭  Max Buildable Scooters (by BOM)"))
+        self._build_status = _status_lbl()
+        lay.addWidget(self._build_status)
+        self._build_table = _make_table(
+            ["Model", "Max Buildable", "Bottleneck Part", "Part Stock", "Needed / Unit"]
         )
-        self._inv_cat_table.setMaximumHeight(220)
-        lay.addWidget(self._inv_cat_table)
+        self._build_table.setMaximumHeight(240)
+        lay.addWidget(self._build_table)
 
-        lay.addWidget(_section_title("⚠ Low Stock Items"))
+        lay.addWidget(_section_title("⚠  Low Stock Items"))
         self._inv_low_status = _status_lbl()
         lay.addWidget(self._inv_low_status)
         self._inv_low_table = _make_table(
-            ["Item Name", "SKU", "Category", "Remaining", "Threshold"]
+            ["Item Name", "SKU", "Remaining", "Threshold"]
         )
         self._inv_low_table.setMaximumHeight(200)
         lay.addWidget(self._inv_low_table)
@@ -259,11 +391,11 @@ class ReportsScreen(QWidget):
         return w
 
     def _run_inventory(self):
-        self._inv_cat_status.setText("Loading…")
+        self._build_status.setText("Loading…")
         self._inv_low_status.setText("Loading…")
         w = ReportWorker("inventory")
         w.done.connect(self._populate_inventory)
-        w.error.connect(lambda e: self._inv_cat_status.setText(f"Error: {e}"))
+        w.error.connect(lambda e: self._build_status.setText(f"Error: {e}"))
         self.workers.append(w)
         w.start()
 
@@ -282,14 +414,20 @@ class ReportsScreen(QWidget):
         old.deleteLater()
         self._inv_kpi = new
 
-        cats = data["by_category"]
-        self._inv_cat_table.setRowCount(len(cats))
-        self._inv_cat_status.setText(f"{len(cats)} categories")
-        for r, row in enumerate(cats):
-            self._inv_cat_table.setItem(r, 0, _cell(row["category"], bold=True))
-            self._inv_cat_table.setItem(r, 1, _cell(row["items"],     Qt.AlignmentFlag.AlignCenter))
-            self._inv_cat_table.setItem(r, 2, _cell(row["remaining"], Qt.AlignmentFlag.AlignCenter))
-            self._inv_cat_table.setItem(r, 3, _cell(row["consumed"],  Qt.AlignmentFlag.AlignCenter))
+        severity_colors = {"critical": "#dc2626", "warning": "#ea580c", "ok": "#16a34a", "none": "#94a3b8"}
+        rows = data.get("buildable", [])
+        self._build_table.setRowCount(len(rows))
+        self._build_status.setText(f"{len(rows)} model(s)")
+        for r, row in enumerate(rows):
+            color = severity_colors.get(row["severity"], "#1a1a1a")
+            self._build_table.setItem(r, 0, _cell(row["model_name"], bold=True))
+            self._build_table.setItem(r, 1, _cell(row["max_buildable"],
+                                                   Qt.AlignmentFlag.AlignCenter, color=color))
+            self._build_table.setItem(r, 2, _cell(row["bottleneck_part"]))
+            self._build_table.setItem(r, 3, _cell(row["stock"],
+                                                   Qt.AlignmentFlag.AlignCenter, color=color))
+            self._build_table.setItem(r, 4, _cell(row["needed_per_unit"],
+                                                   Qt.AlignmentFlag.AlignCenter))
 
         low = data["low_stock_items"]
         self._inv_low_table.setRowCount(len(low))
@@ -297,10 +435,106 @@ class ReportsScreen(QWidget):
         for r, row in enumerate(low):
             self._inv_low_table.setItem(r, 0, _cell(row["item_name"], bold=True))
             self._inv_low_table.setItem(r, 1, _cell(row["sku"]))
-            self._inv_low_table.setItem(r, 2, _cell(row["category"]))
-            self._inv_low_table.setItem(r, 3, _cell(row["remaining"], Qt.AlignmentFlag.AlignCenter,
+            self._inv_low_table.setItem(r, 2, _cell(row["remaining"], Qt.AlignmentFlag.AlignCenter,
                                                      color="#dc2626"))
-            self._inv_low_table.setItem(r, 4, _cell(row["threshold"], Qt.AlignmentFlag.AlignCenter))
+            self._inv_low_table.setItem(r, 3, _cell(row["threshold"], Qt.AlignmentFlag.AlignCenter))
+
+    # ── FINISHED GOODS TAB ────────────────────────────────────
+
+    def _build_finished_goods_tab(self):
+        w, lay = self._scrollable()
+
+        btn = _run_btn(self._run_finished_goods, "#0891b2")
+        self._fg_btn_lay = QHBoxLayout()
+        self._fg_btn_lay.addWidget(btn)
+        self._fg_btn_lay.addStretch()
+        lay.addLayout(self._fg_btn_lay)
+
+        self._fg_kpi = QWidget()
+        lay.addWidget(self._fg_kpi)
+
+        lay.addWidget(_section_title("🛵  Finished Scooters in Inventory (by Model)"))
+        hint = QLabel("Click a model's “View →” to see the colour-wise breakdown and unit details.")
+        hint.setStyleSheet("color:#64748b; font-size:12px;")
+        lay.addWidget(hint)
+
+        self._fg_status = _status_lbl()
+        lay.addWidget(self._fg_status)
+
+        self._fg_table = _make_table(["Model", "Finished Units", "Details"], stretch_cols=[0])
+        self._fg_table.horizontalHeader().setStretchLastSection(False)
+        self._fg_table.setColumnWidth(1, 130)
+        self._fg_table.setColumnWidth(2, 150)
+        self._fg_table.verticalHeader().setDefaultSectionSize(44)
+        lay.addWidget(self._fg_table, 1)
+        return w
+
+    def _run_finished_goods(self):
+        self._fg_status.setText("Loading…")
+        self._fg_table.setRowCount(0)
+        w = ReportWorker("finished-goods")
+        w.done.connect(self._populate_finished_goods)
+        w.error.connect(lambda e: self._fg_status.setText(f"Error: {e}"))
+        self.workers.append(w)
+        w.start()
+
+    def _populate_finished_goods(self, data):
+        kpis = [("Total Finished Scooters", data.get("total", 0), "#0891b2")]
+        old = self._fg_kpi
+        new = _make_kpi_row(kpis)
+        old.parentWidget().layout().replaceWidget(old, new)
+        old.deleteLater()
+        self._fg_kpi = new
+
+        models = data.get("models", [])
+        self._fg_table.setRowCount(len(models))
+        self._fg_status.setText(f"{len(models)} model(s) with finished stock")
+        for r, m in enumerate(models):
+            self._fg_table.setItem(r, 0, _cell(m["model_name"], bold=True))
+            self._fg_table.setItem(r, 1, _cell(m["count"], Qt.AlignmentFlag.AlignCenter,
+                                               color="#0891b2"))
+            btn = QPushButton("View  →")
+            btn.setFixedSize(96, 30)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                "QPushButton { background:#ecfeff; color:#0e7490; border:1px solid #a5f3fc;"
+                " border-radius:6px; font-size:12px; font-weight:600; }"
+                "QPushButton:hover { background:#cffafe; }"
+            )
+            btn.clicked.connect(lambda _, mm=m: self._open_fg_model_tab(mm))
+            wrap = QWidget()
+            wl = QHBoxLayout(wrap)
+            wl.setContentsMargins(6, 6, 6, 6)
+            wl.addStretch()
+            wl.addWidget(btn)
+            wl.addStretch()
+            self._fg_table.setCellWidget(r, 2, wrap)
+
+    def _open_fg_model_tab(self, model):
+        label = f"🛵  {model['model_name']}"
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i).strip() == label.strip():
+                self.tabs.setCurrentIndex(i)
+                return
+        tab = FinishedGoodsModelTab(model["model_id"], model["model_name"])
+        idx = self.tabs.addTab(tab, label)
+        self.tabs.setCurrentIndex(idx)
+
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(18, 18)
+        close_btn.setStyleSheet(
+            "QPushButton { background:transparent; color:#6b7280; border:none; font-size:10px; }"
+            "QPushButton:hover { color:#dc2626; }"
+        )
+        close_btn.clicked.connect(lambda _, t=tab: self._close_fg_tab(t))
+        self.tabs.tabBar().setTabButton(
+            idx, self.tabs.tabBar().ButtonPosition.RightSide, close_btn
+        )
+
+    def _close_fg_tab(self, widget):
+        idx = self.tabs.indexOf(widget)
+        if idx != -1:
+            self.tabs.removeTab(idx)
 
     # ── PRODUCTION TAB ────────────────────────────────────────
 
@@ -309,10 +543,10 @@ class ReportsScreen(QWidget):
 
         filter_w, self._prod_from, self._prod_to = _date_filter()
         btn = _run_btn(self._run_production, "#7c3aed")
-        fr = QHBoxLayout()
-        fr.addWidget(filter_w)
-        fr.addWidget(btn)
-        lay.addLayout(fr)
+        self._prod_filter_lay = QHBoxLayout()
+        self._prod_filter_lay.addWidget(filter_w)
+        self._prod_filter_lay.addWidget(btn)
+        lay.addLayout(self._prod_filter_lay)
 
         self._prod_kpi = QWidget()
         lay.addWidget(self._prod_kpi)
@@ -372,10 +606,10 @@ class ReportsScreen(QWidget):
 
         filter_w, self._disp_from, self._disp_to = _date_filter()
         btn = _run_btn(self._run_dispatch, "#0891b2")
-        fr = QHBoxLayout()
-        fr.addWidget(filter_w)
-        fr.addWidget(btn)
-        lay.addLayout(fr)
+        self._disp_filter_lay = QHBoxLayout()
+        self._disp_filter_lay.addWidget(filter_w)
+        self._disp_filter_lay.addWidget(btn)
+        lay.addLayout(self._disp_filter_lay)
 
         self._disp_kpi = QWidget()
         lay.addWidget(self._disp_kpi)
@@ -433,10 +667,10 @@ class ReportsScreen(QWidget):
 
         filter_w, self._pdi_from, self._pdi_to = _date_filter()
         btn = _run_btn(self._run_pdi, "#dc2626")
-        fr = QHBoxLayout()
-        fr.addWidget(filter_w)
-        fr.addWidget(btn)
-        lay.addLayout(fr)
+        self._pdi_filter_lay = QHBoxLayout()
+        self._pdi_filter_lay.addWidget(filter_w)
+        self._pdi_filter_lay.addWidget(btn)
+        lay.addLayout(self._pdi_filter_lay)
 
         self._pdi_kpi = QWidget()
         lay.addWidget(self._pdi_kpi)
@@ -516,6 +750,22 @@ class ReportsScreen(QWidget):
             self._dmg_stage_table.setItem(r, 0, _cell(row["stage"], bold=True))
             self._dmg_stage_table.setItem(r, 1, _cell(row["count"], Qt.AlignmentFlag.AlignCenter,
                                                         color="#dc2626"))
+
+    # ── TAB AUTO-REFRESH ──────────────────────────────────────
+
+    def _on_tab_changed(self, index: int):
+        # Match against the widget so dynamically-opened model tabs are ignored.
+        w = self.tabs.widget(index)
+        if w is self._tab_inventory:
+            self._run_inventory()
+        elif w is self._tab_finished:
+            self._run_finished_goods()
+        elif w is self._tab_production:
+            self._run_production()
+        elif w is self._tab_dispatch:
+            self._run_dispatch()
+        elif w is self._tab_pdi:
+            self._run_pdi()
 
     # ── UTILITY ───────────────────────────────────────────────
 

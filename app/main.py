@@ -33,10 +33,27 @@ def _run_migrations():
         ADD COLUMN IF NOT EXISTS location_id VARCHAR
         REFERENCES locations(id);
         """,
+        """
+        ALTER TABLE damage_records
+        ADD COLUMN IF NOT EXISTS dealer_id VARCHAR
+        REFERENCES dealers(id);
+        """,
+        """
+        ALTER TABLE damage_records
+        ADD COLUMN IF NOT EXISTS part_name_free VARCHAR(300);
+        """,
     ]
     with engine.begin() as conn:
         for sql in migrations:
             conn.execute(text(sql))
+        # Ensure the special "General Parts" model exists
+        conn.execute(text("""
+            INSERT INTO scooter_models (id, model_name, model_code, is_active)
+            SELECT gen_random_uuid()::text, 'General Parts', 'GEN', true
+            WHERE NOT EXISTS (
+                SELECT 1 FROM scooter_models WHERE model_code = 'GEN'
+            );
+        """))
     print("✓ Migrations applied.")
 
 

@@ -3,14 +3,14 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.database import get_db
 from app.core.dependencies import (
-    get_current_user, require_manager_or_above,
+    require_manager_or_above,
     require_any_role, can_see_financials
 )
 from app.models import (
     InventoryItem, InventoryCategory,
     StockMovement, User, Location,
     InventoryLocationStock,
-    DispatchNotePart, DispatchNote, Dealer,
+    DispatchNotePart,
 )
 from app.schemas.inventory import (
     CategoryCreate, CategoryResponse,
@@ -156,24 +156,25 @@ def get_item_locations(
     current_user: User    = Depends(require_any_role)
 ):
     """Get stock breakdown by location for a specific item."""
-    stocks = db.query(InventoryLocationStock).filter(
-        InventoryLocationStock.item_id  == item_id,
-        InventoryLocationStock.quantity >  0
-    ).all()
+    rows = (
+        db.query(InventoryLocationStock, Location)
+        .join(Location, InventoryLocationStock.location_id == Location.id)
+        .filter(
+            InventoryLocationStock.item_id  == item_id,
+            InventoryLocationStock.quantity >  0
+        )
+        .all()
+    )
 
-    result = []
-    for s in stocks:
-        loc = db.query(Location).filter(
-            Location.id == s.location_id
-        ).first()
-        if loc:
-            result.append({
-                "location_id":   s.location_id,
-                "location_name": loc.name,
-                "location_type": loc.location_type,
-                "quantity":      s.quantity,
-            })
-    return result
+    return [
+        {
+            "location_id":   s.location_id,
+            "location_name": loc.name,
+            "location_type": loc.location_type,
+            "quantity":      s.quantity,
+        }
+        for s, loc in rows
+    ]
 
 
 @router.post("/items")
@@ -182,7 +183,8 @@ def create_item(
     db:           Session = Depends(get_db),
     current_user: User    = Depends(require_manager_or_above)
 ):
-    if not data.model_name or not data.model_name.strip():
+    is_gen = data.sku.upper().startswith("GEN-")
+    if not is_gen and (not data.model_name or not data.model_name.strip()):
         raise HTTPException(400, "Model name is required.")
 
     # Check active items — if exists just add stock

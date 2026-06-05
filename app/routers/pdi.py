@@ -6,13 +6,41 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from typing import List, Optional
+from sqlalchemy import func
+from typing import Optional
 from app.database import get_db
 from app.core.dependencies import require_any_role, require_manager_or_above
-from app.models import ScooterUnit, User, VehicleStatus, ScooterModel
-from app.schemas.pdi import ScooterUnitResponse, PDICompleteRequest
+from app.models import ScooterUnit, User, VehicleStatus
+from app.schemas.pdi import PDICompleteRequest
 
 router = APIRouter(prefix="/pdi", tags=["PDI"])
+
+
+@router.get("/summary")
+def get_pdi_summary(
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_any_role),
+):
+    """Counts for the PDI screen stat cards."""
+    awaiting = db.query(func.count(ScooterUnit.id)).filter(
+        ScooterUnit.status.in_([
+            VehicleStatus.manufacturing_done,
+            VehicleStatus.pdi_pending,
+            VehicleStatus.pdi_in_progress,
+        ])
+    ).scalar() or 0
+    # "All time" — a delivered unit must have passed PDI first, so count both.
+    pdi_done = db.query(func.count(ScooterUnit.id)).filter(
+        ScooterUnit.status.in_([VehicleStatus.pdi_done, VehicleStatus.delivered])
+    ).scalar() or 0
+    delivered = db.query(func.count(ScooterUnit.id)).filter(
+        ScooterUnit.status == VehicleStatus.delivered
+    ).scalar() or 0
+    return {
+        "awaiting":  int(awaiting),
+        "pdi_done":  int(pdi_done),
+        "delivered": int(delivered),
+    }
 
 
 def _unit_to_response(unit: ScooterUnit) -> dict:
@@ -101,6 +129,17 @@ def complete_pdi(
     unit.chassis_number = data.chassis_number
     unit.pdi_number     = data.pdi_number
     unit.status         = VehicleStatus.pdi_done
+
+    # Record the PDI pass so reports can track completed/passed counts.
+    from app.models import PDIRecord, PDIResult
+    from sqlalchemy import func as _func
+    record = PDIRecord(
+        scooter_unit_id = unit.id,
+        inspector_id    = current_user.id,
+        result          = PDIResult.passed,
+        completed_at    = _func.now(),
+    )
+    db.add(record)
     db.commit()
     return {"message": "PDI completed successfully."}
 

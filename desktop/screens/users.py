@@ -2,13 +2,11 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTableWidget, QTableWidgetItem,
     QDialog, QFormLayout, QLineEdit, QComboBox,
-    QMessageBox, QHeaderView, QAbstractItemView,
-    QCheckBox, QFrame
+    QMessageBox, QHeaderView, QAbstractItemView
 )
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont, QColor
 from desktop.utils.api_client import APIClient, APIError
-from desktop.utils.session import Session
 
 
 # ── WORKER ────────────────────────────────────────────────────
