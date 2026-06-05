@@ -52,13 +52,11 @@ class BOMItemResponse(BaseModel):
 # ── ASSEMBLY JOBS ─────────────────────────────────────────────
 
 class AssemblyJobCreate(BaseModel):
-    model_id:     str
-    color:        str
-    battery_type: str
-    power_spec:   str
-    quantity:     int
-    location_id:  Optional[str] = None
-    notes:        Optional[str] = None
+    model_id:    str
+    color:       str
+    quantity:    int
+    location_id: Optional[str] = None
+    notes:       Optional[str] = None
 
 
 class AssemblyJobUpdate(BaseModel):

@@ -140,35 +140,20 @@ class MainWindow(QMainWindow):
             widget = WarehousesScreen()
 
         elif screen == "dealers":
-            widget = _coming_soon_screen(
-                "🚚", "Dealer Management",
-                "Dispatch scooters to dealers, track deliveries,\n"
-                "manage returns, replacements and warranty movements."
-            )
+            from desktop.screens.dealers import DealersScreen
+            widget = DealersScreen()
         elif screen == "shipments":
-            widget = _coming_soon_screen(
-                "📥", "Import & Shipment Management",
-                "Track incoming containers from China, manage part receipts,\n"
-                "record shortages and damaged goods at arrival."
-            )
+            from desktop.screens.shipments import ShipmentsScreen
+            widget = ShipmentsScreen()
         elif screen == "spare_parts":
-            widget = _coming_soon_screen(
-                "🔧", "Spare Parts Management",
-                "Manage spare part inventory separately from production stock.\n"
-                "Track dispatches to dealers and service centres."
-            )
+            from desktop.screens.spare_parts import SparePartsScreen
+            widget = SparePartsScreen()
         elif screen == "damage":
-            widget = _coming_soon_screen(
-                "⚠️", "Damage & Defect Log",
-                "Record damaged, defective, or scrapped inventory at every stage.\n"
-                "Track root causes, responsible stage and financial impact."
-            )
+            from desktop.screens.damage_log import DamageLogScreen
+            widget = DamageLogScreen()
         elif screen == "reports":
-            widget = _coming_soon_screen(
-                "📊", "Reports & Analytics",
-                "Production reports, inventory valuation, PDI success rates,\n"
-                "dealer performance, movement logs and audit history."
-            )
+            from desktop.screens.reports import ReportsScreen
+            widget = ReportsScreen()
         else:
             widget = _coming_soon_screen(
                 "📋", screen.replace("_", " ").title(),

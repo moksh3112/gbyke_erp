@@ -44,17 +44,18 @@ class StockMovementType(str, enum.Enum):
     returned            = "returned"
     correction_remove   = "correction_remove"
 
+class ShipmentStatus(str, enum.Enum):
+    pending  = "pending"
+    received = "received"
+    partial  = "partial"
+    closed   = "closed"
+
 class TransferStatus(str, enum.Enum):
     pending    = "pending"
     in_transit = "in_transit"
     completed  = "completed"
     cancelled  = "cancelled"
 
-class ShipmentStatus(str, enum.Enum):
-    pending  = "pending"
-    received = "received"
-    partial  = "partial"
-    closed   = "closed"
 
 class DamageStage(str, enum.Enum):
     import_receiving = "import_receiving"
@@ -349,6 +350,50 @@ class Dealer(Base):
     state         = Column(String(50))
     is_active     = Column(Boolean, default=True)
     created_at    = Column(DateTime(timezone=True), server_default=func.now())
+
+
+# ── DISPATCH NOTES ────────────────────────────────────────────
+
+class DispatchNote(Base):
+    __tablename__ = "dispatch_notes"
+
+    id            = Column(String, primary_key=True, default=gen_uuid)
+    dealer_id     = Column(String, ForeignKey("dealers.id"), nullable=False)
+    dispatch_date = Column(Date, nullable=False)
+    notes         = Column(Text)
+    dispatched_by = Column(String, ForeignKey("users.id"))
+    created_at    = Column(DateTime(timezone=True), server_default=func.now())
+
+    dealer   = relationship("Dealer")
+    scooters = relationship("DispatchNoteScooter", back_populates="dispatch_note", cascade="all, delete-orphan")
+    parts    = relationship("DispatchNotePart",    back_populates="dispatch_note", cascade="all, delete-orphan")
+
+
+class DispatchNoteScooter(Base):
+    __tablename__ = "dispatch_note_scooters"
+
+    id               = Column(String, primary_key=True, default=gen_uuid)
+    dispatch_note_id = Column(String, ForeignKey("dispatch_notes.id"), nullable=False)
+    scooter_unit_id  = Column(String, ForeignKey("scooter_units.id"), nullable=False)
+
+    dispatch_note = relationship("DispatchNote", back_populates="scooters")
+    scooter_unit  = relationship("ScooterUnit")
+
+
+class DispatchNotePart(Base):
+    __tablename__ = "dispatch_note_parts"
+
+    id                = Column(String, primary_key=True, default=gen_uuid)
+    dispatch_note_id  = Column(String, ForeignKey("dispatch_notes.id"), nullable=False)
+    inventory_item_id = Column(String, ForeignKey("inventory_items.id"), nullable=True)
+    location_id       = Column(String, ForeignKey("locations.id"), nullable=True)
+    part_name         = Column(String(200), nullable=False)
+    quantity          = Column(Integer, nullable=False)
+    notes             = Column(Text)
+
+    dispatch_note  = relationship("DispatchNote", back_populates="parts")
+    inventory_item = relationship("InventoryItem")
+    location       = relationship("Location")
 
 
 # ── STOCK TRANSFERS ───────────────────────────────────────────

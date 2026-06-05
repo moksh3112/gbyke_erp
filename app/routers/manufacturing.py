@@ -93,12 +93,12 @@ def _job_to_response(job: AssemblyJob, db: Session) -> dict:
 
 
 def _get_applicable_bom_items(
-    db: Session, model_id: str, colour: str, battery_type: str, power_spec: str
+    db: Session, model_id: str, colour: str
 ) -> List[BOMItem]:
     """
     Returns BOM items applicable for this specific configuration.
-    - Items with no filter → always included
-    - Items with specific filters → only if they match the selected attribute
+    - Items with no colour filter → always included
+    - Items with a colour filter → only if they match the selected colour
     """
     all_items = db.query(BOMItem).filter(
         BOMItem.model_id == model_id
@@ -107,10 +107,6 @@ def _get_applicable_bom_items(
     applicable = []
     for item in all_items:
         if item.colour and item.colour.lower() != (colour or "").lower():
-            continue
-        if item.battery_type and item.battery_type.lower() != (battery_type or "").lower():
-            continue
-        if item.power_spec and item.power_spec.lower() != (power_spec or "").lower():
             continue
         applicable.append(item)
     return applicable
@@ -277,9 +273,9 @@ def check_stock(
         raise HTTPException(404, "Model not found.")
 
     bom_items = _get_applicable_bom_items(
-        db, data.model_id, data.color, data.battery_type, data.power_spec
+        db, data.model_id, data.color
     )
-    
+
     shortages = []
     for bom in bom_items:
         inv = _find_inventory_item(db, bom)
@@ -368,14 +364,13 @@ def create_job(
         raise HTTPException(400, "Quantity must be greater than 0.")
 
     bom_items = _get_applicable_bom_items(
-        db, data.model_id, data.color, data.battery_type, data.power_spec
+        db, data.model_id, data.color
     )
 
     if not bom_items:
         raise HTTPException(
             400,
-            f"No BOM defined for {model.model_name} ({data.battery_type} - {data.power_spec}). "
-            "Please configure the BOM first."
+            f"No BOM defined for {model.model_name}. Please configure the BOM first."
         )
 
     shortages = []
@@ -413,8 +408,6 @@ def create_job(
         id           = gen_uuid(),
         model_id     = data.model_id,
         color        = data.color,
-        battery_type = data.battery_type,
-        power_spec   = data.power_spec,
         quantity     = data.quantity,
         location_id  = data.location_id,
         status       = AssemblyStatus.in_progress,
@@ -512,15 +505,15 @@ def cancel_job(
         raise HTTPException(400, "Job is already cancelled.")
  
     bom_items = _get_applicable_bom_items(
-        db, job.model_id, job.color, job.battery_type, job.power_spec
+        db, job.model_id, job.color
     )
- 
+
     for bom in bom_items:
         inv = _find_inventory_item(db, bom)
         if not inv:
             continue
         returned = bom.quantity_required * job.quantity
- 
+
         # FIX 8: guard against going negative
         inv.consumed_quantity  = max(0, inv.consumed_quantity - returned)
         inv.remaining_quantity += returned
@@ -590,7 +583,7 @@ def delete_job(
  
     if job.status != AssemblyStatus.cancelled:
         bom_items = _get_applicable_bom_items(
-            db, job.model_id, job.color, job.battery_type, job.power_spec
+            db, job.model_id, job.color
         )
         for bom in bom_items:
             inv = _find_inventory_item(db, bom)

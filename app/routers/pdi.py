@@ -4,9 +4,9 @@
 # FIX 11: Broaden filter to include pdi_pending + pdi_in_progress units too
 # FIX 12: Added PATCH /pdi/{unit_id}/start endpoint for pdi_in_progress transition
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from typing import List
+from typing import List, Optional
 from app.database import get_db
 from app.core.dependencies import require_any_role, require_manager_or_above
 from app.models import ScooterUnit, User, VehicleStatus, ScooterModel
@@ -18,15 +18,33 @@ router = APIRouter(prefix="/pdi", tags=["PDI"])
 def _unit_to_response(unit: ScooterUnit) -> dict:
     """Build response dict — resolves model_name via the ORM relationship."""
     return {
-        "id":             unit.id,
-        "serial_number":  unit.serial_number,
-        "chassis_number": unit.chassis_number,
-        "model_name":     unit.model.model_name if unit.model else None,
-        "color":          unit.color,
-        "battery_type":   unit.battery_type,
-        "power_spec":     unit.power_spec,
-        "status":         unit.status.value if unit.status else None,
+        "id":                 unit.id,
+        "serial_number":      unit.serial_number,
+        "chassis_number":     unit.chassis_number,
+        "pdi_number":         unit.pdi_number,
+        "model_name":         unit.model.model_name if unit.model else None,
+        "color":              unit.color,
+        "status":             unit.status.value if unit.status else None,
+        "current_dealer_id":  unit.current_dealer_id,
     }
+
+
+@router.get("/units")
+def lookup_units(
+    pdi_number:    Optional[str] = Query(None),
+    serial_number: Optional[str] = Query(None),
+    db:            Session = Depends(get_db),
+    current_user:  User    = Depends(require_any_role),
+):
+    """Look up scooter units by PDI number or serial number."""
+    q = db.query(ScooterUnit).options(joinedload(ScooterUnit.model))
+    if pdi_number:
+        q = q.filter(ScooterUnit.pdi_number == pdi_number)
+    elif serial_number:
+        q = q.filter(ScooterUnit.serial_number == serial_number)
+    else:
+        return []
+    return [_unit_to_response(u) for u in q.all()]
 
 
 @router.get("/pending")

@@ -19,10 +19,11 @@ class LoadInventoryWorker(QThread):
     done  = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, search="", low_stock=False):
+    def __init__(self, search="", low_stock=False, spare_parts=False):
         super().__init__()
-        self.search    = search
-        self.low_stock = low_stock
+        self.search      = search
+        self.low_stock   = low_stock
+        self.spare_parts = spare_parts
 
     def run(self):
         try:
@@ -31,6 +32,8 @@ class LoadInventoryWorker(QThread):
                 params.append(f"search={self.search}")
             if self.low_stock:
                 params.append("low_stock_only=true")
+            if self.spare_parts:
+                params.append("spare_parts_only=true")
             qs     = "?" + "&".join(params) if params else ""
             result = APIClient.get(f"/inventory/items{qs}")
             self.done.emit(result)
@@ -200,7 +203,7 @@ class ImportForm(QWidget):
                 loc.get("location_type", ""), "📍"
             )
             self.location_combo.addItem(f"{icon}  {loc['name']}", loc["id"])
-        l = QLabel("Location"); l.setStyleSheet(lbl)
+        l = QLabel("Location *"); l.setStyleSheet(lbl)
         layout.addRow(l, self.location_combo)
 
         # Quantity
@@ -270,6 +273,8 @@ class ImportForm(QWidget):
         part = self.part_combo.currentText().strip()
         if not part:
             return "Please select or enter the part name."
+        if not self.location_combo.currentData():
+            return "Please select a location."
         return ""
 
     def get_data(self) -> dict:
@@ -1054,6 +1059,7 @@ class ItemHistoryWidget(QWidget):
         consumed    = movements.get("consumed",    [])
         transfers   = movements.get("transfers",   [])
         corrections = movements.get("corrections", [])
+        dispatches  = movements.get("dispatches",  [])
 
         if purchases:
             history_row.addWidget(self._section(
@@ -1101,7 +1107,17 @@ class ItemHistoryWidget(QWidget):
                 )
             ))
 
-        if not any([purchases, defectives, consumed, transfers]):
+        if dispatches:
+            history_row.addWidget(self._section(
+                "🚚 Dispatched as Spare Part", dispatches, "#0f766e", "#f0fdfa",
+                lambda e: (
+                    f"📅 {e['dispatch_date']}\n"
+                    f"   {e['quantity']} pcs  →  {e['dealer_name']}"
+                    + (f"\n   {e['notes'][:50]}" if e['notes'] else "")
+                )
+            ))
+
+        if not any([purchases, defectives, consumed, transfers, dispatches]):
             no_hist = QLabel("No history recorded yet.")
             no_hist.setStyleSheet("color:#94a3b8; font-size:12px;")
             history_row.addWidget(no_hist)
@@ -1225,7 +1241,22 @@ class InventoryScreen(QWidget):
         )
         refresh_btn.clicked.connect(self._refresh)
 
+        self.spare_parts_btn = QPushButton("🔧 Spare Parts Only")
+        self.spare_parts_btn.setFixedHeight(36)
+        self.spare_parts_btn.setCheckable(True)
+        self.spare_parts_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.spare_parts_btn.setStyleSheet("""
+            QPushButton {
+                border:1px solid #ddd; border-radius:6px; padding:0 12px; color:#666;
+            }
+            QPushButton:checked {
+                background:#ede9fe; border-color:#7c3aed; color:#5b21b6;
+            }
+        """)
+        self.spare_parts_btn.clicked.connect(self._load_items)
+
         filter_row.addWidget(self.search_input, 1)
+        filter_row.addWidget(self.spare_parts_btn)
         filter_row.addWidget(self.low_stock_btn)
         filter_row.addWidget(refresh_btn)
         layout.addLayout(filter_row)
@@ -1319,7 +1350,8 @@ class InventoryScreen(QWidget):
         self.expanded_rows = {}
         worker = LoadInventoryWorker(
             search=self.search_input.text().strip(),
-            low_stock=self.low_stock_btn.isChecked()
+            low_stock=self.low_stock_btn.isChecked(),
+            spare_parts=self.spare_parts_btn.isChecked(),
         )
         worker.done.connect(self._populate_table)
         worker.error.connect(lambda e: self.status_label.setText(f"Error: {e}"))

@@ -9,7 +9,8 @@ from app.core.dependencies import (
 from app.models import (
     InventoryItem, InventoryCategory,
     StockMovement, User, Location,
-    InventoryLocationStock
+    InventoryLocationStock,
+    DispatchNotePart, DispatchNote, Dealer,
 )
 from app.schemas.inventory import (
     CategoryCreate, CategoryResponse,
@@ -581,12 +582,32 @@ def get_movements(
             # Bug 2 fix: correction_remove always goes to corrections section
             corrections.append(entry)
 
+    # Spare part dispatches from dispatch notes
+    dispatches = []
+    parts = (
+        db.query(DispatchNotePart)
+        .filter(DispatchNotePart.inventory_item_id == item_id)
+        .order_by(DispatchNotePart.id.desc())
+        .all()
+    )
+    for p in parts:
+        note   = p.dispatch_note
+        dealer = note.dealer if note else None
+        dispatches.append({
+            "quantity":      p.quantity,
+            "dealer_name":   dealer.dealer_name if dealer else "—",
+            "dispatch_date": str(note.dispatch_date) if note else "—",
+            "notes":         p.notes or "",
+            "part_name":     p.part_name,
+        })
+
     return {
         "imports":     imports,
         "defectives":  defectives,
         "consumed":    consumed,
         "transfers":   transfers,
         "corrections": corrections,
+        "dispatches":  dispatches,
     }
 
 

@@ -111,9 +111,9 @@ class Sidebar(QWidget):
         ]
         # Manager and above
         manager_items = [
+            ("📥", "Shipments",      "shipments"),
             ("🏢", "Warehouses",     "warehouses"),
             ("🚚", "Dealers",        "dealers"),
-            ("📥", "Shipments",      "shipments"),
             ("🔧", "Spare Parts",    "spare_parts"),
             ("⚠️",  "Damage Log",    "damage"),
             ("📊", "Reports",        "reports"),

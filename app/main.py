@@ -8,8 +8,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
+from sqlalchemy import text
 from app.database import Base, engine, test_connection
-from app.routers import auth, inventory, models, users, manufacturing, pdi, warehouses 
+from app.routers import auth, inventory, models, users, manufacturing, pdi, warehouses, dealers, shipments, spare_parts, damage_log, reports
 import app.models
 
 # ── Single source of truth ────────────────────────────────────────────────────
@@ -19,10 +20,31 @@ except ImportError:
     VERSION = "unknown"
 
 
+def _run_migrations():
+    """Safe column additions — each is idempotent (IF NOT EXISTS)."""
+    migrations = [
+        """
+        ALTER TABLE dispatch_note_parts
+        ADD COLUMN IF NOT EXISTS inventory_item_id VARCHAR
+        REFERENCES inventory_items(id);
+        """,
+        """
+        ALTER TABLE dispatch_note_parts
+        ADD COLUMN IF NOT EXISTS location_id VARCHAR
+        REFERENCES locations(id);
+        """,
+    ]
+    with engine.begin() as conn:
+        for sql in migrations:
+            conn.execute(text(sql))
+    print("✓ Migrations applied.")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     test_connection()
     Base.metadata.create_all(bind=engine)
+    _run_migrations()
     print("✓ All tables ready.")
     yield
 
@@ -39,7 +61,12 @@ app.include_router(models.router)
 app.include_router(users.router)
 app.include_router(manufacturing.router)
 app.include_router(pdi.router)
-app.include_router(warehouses.router) 
+app.include_router(warehouses.router)
+app.include_router(dealers.router)
+app.include_router(shipments.router)
+app.include_router(spare_parts.router)
+app.include_router(damage_log.router)
+app.include_router(reports.router)
 
 
 @app.get("/")
