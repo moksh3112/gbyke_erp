@@ -1,9 +1,27 @@
 import os
+import sys
 import requests
 from dotenv import load_dotenv
 from desktop.utils.session import Session
 
-load_dotenv()
+
+def _load_env():
+    """
+    Load .env from beside the exe (frozen) or the project root (dev).
+    This lets each laptop point at the server by editing a .env next to the exe.
+    """
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    env_path = os.path.join(base, ".env")
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+    else:
+        load_dotenv()   # fallback: search cwd
+
+
+_load_env()
 
 SERVER_IP   = os.getenv("SERVER_IP", "127.0.0.1")
 SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
