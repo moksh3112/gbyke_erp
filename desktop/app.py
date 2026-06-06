@@ -13,6 +13,7 @@ from desktop.screens.dashboard_admin import AdminDashboard
 from desktop.screens.dashboard_user import UserDashboard
 from desktop.components.sidebar import Sidebar
 from desktop.utils.session import Session
+from desktop.update_notifier import UpdatePoller
 
 
 def _coming_soon_screen(icon: str, title: str, description: str) -> QWidget:
@@ -95,6 +96,28 @@ class MainWindow(QMainWindow):
             pass
         self._show_main_app()
         self.show()
+        self._start_update_poller()
+
+    def _start_update_poller(self):
+        self._update_poller = UpdatePoller()
+        self._update_poller.update_available.connect(self._show_update_banner)
+        self._update_poller.start()
+
+    def _show_update_banner(self, new_version: str):
+        from version import VERSION
+        banner = QLabel(
+            f"  ⬆  Update available (v{new_version}). "
+            f"Please restart the app when done to install."
+        )
+        banner.setStyleSheet(
+            "background: #fef9c3; color: #713f12; font-size: 12px;"
+            " font-weight: 600; padding: 6px 12px;"
+        )
+        banner.setFixedHeight(32)
+        # Insert banner at the top of the central widget's layout
+        central = self.centralWidget()
+        if central and central.layout():
+            central.layout().insertWidget(0, banner)
 
     def _show_main_app(self):
         container = QWidget()

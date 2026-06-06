@@ -32,6 +32,14 @@ echo.
 echo [2/3] Installing any new required packages...
 pip install -r requirements.txt --quiet
 
+:: Rebuild the client exe so laptops can auto-update
+echo.
+echo [2.5/3] Rebuilding client exe for laptop distribution...
+python -m PyInstaller gbyke_erp.spec --clean --noconfirm >nul 2>&1
+if %errorlevel% neq 0 (
+    echo WARNING: Could not rebuild client exe. Continuing with server restart.
+)
+
 :: Restart the server
 echo.
 echo [3/3] Restarting G-Byke ERP server...

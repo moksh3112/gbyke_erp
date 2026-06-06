@@ -1,9 +1,12 @@
+import os
 import requests
+from dotenv import load_dotenv
 from desktop.utils.session import Session
 
-# ── CHANGE THIS TO CAMERA PC's LOCAL IP WHEN DEPLOYING ────────
-SERVER_IP   = "127.0.0.1"
-SERVER_PORT = 8000
+load_dotenv()
+
+SERVER_IP   = os.getenv("SERVER_IP", "127.0.0.1")
+SERVER_PORT = int(os.getenv("SERVER_PORT", "8000"))
 BASE_URL    = f"http://{SERVER_IP}:{SERVER_PORT}"
 TIMEOUT     = 10
 

@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from contextlib import asynccontextmanager
 from sqlalchemy import text
 from app.database import Base, engine, test_connection
-from app.routers import auth, inventory, models, users, manufacturing, pdi, warehouses, dealers, shipments, spare_parts, damage_log, reports
+from app.routers import auth, inventory, models, users, manufacturing, pdi, warehouses, dealers, shipments, spare_parts, damage_log, reports, updates
 import app.models
 
 # ── Single source of truth ────────────────────────────────────────────────────
@@ -84,6 +84,7 @@ app.include_router(shipments.router)
 app.include_router(spare_parts.router)
 app.include_router(damage_log.router)
 app.include_router(reports.router)
+app.include_router(updates.router)
 
 
 @app.get("/")
