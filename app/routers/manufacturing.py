@@ -15,8 +15,10 @@ from app.schemas.manufacturing import (
     BOMItemCreate, BOMItemUpdate,
     AssemblyJobCreate,
     StockCheckResponse,
+    AddBOMStockRequest,
 )
 from pydantic import BaseModel
+import re
 import uuid
 
 router = APIRouter(prefix="/manufacturing", tags=["Manufacturing"])
@@ -24,6 +26,36 @@ router = APIRouter(prefix="/manufacturing", tags=["Manufacturing"])
 
 def gen_uuid():
     return str(uuid.uuid4())
+
+
+def _clean(text: str) -> str:
+    return re.sub(r'[^a-zA-Z0-9]', '', str(text)).upper()[:8]
+
+
+def _generate_sku(model_code: str, part_name: str, colour: str = "") -> str:
+    """Backend mirror of the desktop generate_sku — used only as a fallback
+    when a BOM row has no SKU of its own."""
+    sku = f"{model_code}-{_clean(part_name)}"
+    if colour and colour.strip():
+        sku += f"-{_clean(colour)}"
+    return sku
+
+
+def _effective_colour(bom: "BOMItem", scooter_colour: str):
+    """The colour the inventory row for this BOM part should carry for a given
+    scooter colour. Colour-specific parts take the scooter's colour; generic
+    parts stay None; legacy rows keep their pinned colour."""
+    if bom.is_colour_specific:
+        return scooter_colour or None
+    return bom.colour or None
+
+
+def _effective_sku(bom: "BOMItem", scooter_colour: str):
+    """SKU of the inventory row for this BOM part. Colour-specific parts append
+    the scooter colour to their base SKU; everything else uses the stored SKU."""
+    if bom.is_colour_specific and scooter_colour and bom.sku:
+        return f"{bom.sku}-{_clean(scooter_colour)}"
+    return bom.sku
 
 
 # ── HELPERS ───────────────────────────────────────────────────
@@ -51,6 +83,7 @@ def _bom_to_response(b: BOMItem, db: Session) -> dict:
         "item_name":         item_name,
         "quantity_required": b.quantity_required,
         "colour":            b.colour,
+        "is_colour_specific": b.is_colour_specific,
         "battery_type":      b.battery_type,
         "power_spec":        b.power_spec,
         "notes":             b.notes,
@@ -97,9 +130,10 @@ def _get_applicable_bom_items(
     db: Session, model_id: str, colour: str
 ) -> List[BOMItem]:
     """
-    Returns BOM items applicable for this specific configuration.
-    - Items with no colour filter → always included
-    - Items with a colour filter → only if they match the selected colour
+    Returns BOM items applicable for this configuration.
+    - Generic parts (no colour, not colour-specific) → always included
+    - Colour-specific parts → always included (the caller materialises the colour)
+    - Legacy rows with a pinned colour → only if they match the selected colour
     """
     all_items = db.query(BOMItem).filter(
         BOMItem.model_id == model_id
@@ -107,42 +141,54 @@ def _get_applicable_bom_items(
 
     applicable = []
     for item in all_items:
-        if item.colour and item.colour.lower() != (colour or "").lower():
+        # Legacy pinned-colour rows still filter by exact colour match
+        if not item.is_colour_specific and item.colour \
+                and item.colour.lower() != (colour or "").lower():
             continue
         applicable.append(item)
     return applicable
 
 
-def _find_inventory_item(db: Session, bom: BOMItem) -> Optional[InventoryItem]:
+def _model_has_colour_specific(db: Session, model_id: str) -> bool:
+    return db.query(BOMItem).filter(
+        BOMItem.model_id           == model_id,
+        BOMItem.is_colour_specific == True
+    ).first() is not None
+
+
+def _find_inventory_item(
+    db: Session, bom: BOMItem, sku: str = None, colour: str = None
+) -> Optional[InventoryItem]:
     """
-    Find matching inventory item for a BOM item.
-    Priority: SKU match → exact name match → partial name match
+    Find the matching inventory item for a BOM part.
+    `sku`/`colour` are the *effective* values (already colour-resolved by the
+    caller for colour-specific parts). Priority: direct link → SKU → name(+colour).
     """
-    if bom.inventory_item_id:
+    eff_sku = sku if sku is not None else bom.sku
+
+    # Direct legacy link — never for colour-specific parts (they span colours)
+    if bom.inventory_item_id and not bom.is_colour_specific:
         item = db.query(InventoryItem).filter(
             InventoryItem.id       == bom.inventory_item_id,
             InventoryItem.is_active == True
         ).first()
         if item: return item
 
-    if bom.sku:
+    if eff_sku:
         item = db.query(InventoryItem).filter(
-            InventoryItem.sku       == bom.sku,
+            InventoryItem.sku       == eff_sku,
             InventoryItem.is_active == True
         ).first()
         if item: return item
 
     if bom.part_name:
-        item = db.query(InventoryItem).filter(
+        q = db.query(InventoryItem).filter(
             InventoryItem.item_name == bom.part_name,
             InventoryItem.is_active == True
-        ).first()
-        if item: return item
-
-        item = db.query(InventoryItem).filter(
-            InventoryItem.item_name.ilike(f"%{bom.part_name}%"),
-            InventoryItem.is_active == True
-        ).first()
+        )
+        if colour:
+            q = q.filter(InventoryItem.colour.ilike(colour))
+        item = q.first()
         if item: return item
 
     return None
@@ -211,17 +257,20 @@ def create_bom_item(
         if existing:
             raise HTTPException(400, f"'{data.part_name.strip()}' already exists in this model's BOM.")
 
+    # Colour-specific parts span every colour: store no pinned colour and a
+    # base SKU (the colour suffix is appended per scooter colour at stock time).
     bom_item = BOMItem(
-        id                = gen_uuid(),
-        model_id          = data.model_id,
-        part_name         = data.part_name.strip() if data.part_name else None,
-        sku               = data.sku.strip().upper() if data.sku else None,
-        inventory_item_id = data.inventory_item_id or None,
-        quantity_required = data.quantity_required,
-        colour            = data.colour.strip() if data.colour else None,
-        battery_type      = data.battery_type.strip() if data.battery_type else None,
-        power_spec        = data.power_spec.strip() if data.power_spec else None,
-        notes             = data.notes,
+        id                 = gen_uuid(),
+        model_id           = data.model_id,
+        part_name          = data.part_name.strip() if data.part_name else None,
+        sku                = data.sku.strip().upper() if data.sku else None,
+        inventory_item_id  = data.inventory_item_id or None,
+        quantity_required  = data.quantity_required,
+        colour             = None if data.is_colour_specific else (data.colour.strip() if data.colour else None),
+        is_colour_specific = bool(data.is_colour_specific),
+        battery_type       = data.battery_type.strip() if data.battery_type else None,
+        power_spec         = data.power_spec.strip() if data.power_spec else None,
+        notes              = data.notes,
     )
     db.add(bom_item)
     db.commit()
@@ -240,13 +289,18 @@ def update_bom_item(
     if not item:
         raise HTTPException(404, "BOM item not found.")
 
-    if data.part_name         is not None: item.part_name         = data.part_name.strip()
-    if data.sku               is not None: item.sku               = data.sku.strip().upper() or None
-    if data.quantity_required is not None: item.quantity_required = data.quantity_required
-    if data.colour            is not None: item.colour            = data.colour.strip() or None
-    if data.battery_type      is not None: item.battery_type      = data.battery_type.strip() or None
-    if data.power_spec        is not None: item.power_spec        = data.power_spec.strip() or None
-    if data.notes             is not None: item.notes             = data.notes
+    if data.part_name          is not None: item.part_name          = data.part_name.strip()
+    if data.sku                is not None: item.sku                = data.sku.strip().upper() or None
+    if data.quantity_required  is not None: item.quantity_required  = data.quantity_required
+    if data.colour             is not None: item.colour             = data.colour.strip() or None
+    if data.is_colour_specific is not None: item.is_colour_specific = bool(data.is_colour_specific)
+    if data.battery_type       is not None: item.battery_type       = data.battery_type.strip() or None
+    if data.power_spec         is not None: item.power_spec         = data.power_spec.strip() or None
+    if data.notes              is not None: item.notes              = data.notes
+
+    # Colour-specific parts never keep a pinned colour
+    if item.is_colour_specific:
+        item.colour = None
 
     db.commit()
     db.refresh(item)
@@ -281,13 +335,20 @@ def check_stock(
     if not model:
         raise HTTPException(404, "Model not found.")
 
+    if not data.color and _model_has_colour_specific(db, data.model_id):
+        raise HTTPException(
+            400, "Select a colour — this model has colour-specific parts."
+        )
+
     bom_items = _get_applicable_bom_items(
         db, data.model_id, data.color
     )
 
     shortages = []
     for bom in bom_items:
-        inv = _find_inventory_item(db, bom)
+        eff_colour = _effective_colour(bom, data.color)
+        eff_sku    = _effective_sku(bom, data.color)
+        inv = _find_inventory_item(db, bom, sku=eff_sku, colour=eff_colour)
         part_name = bom.part_name or (inv.item_name if inv else "Unknown Part")
         required = bom.quantity_required * data.quantity
 
@@ -372,6 +433,11 @@ def create_job(
     if data.quantity <= 0:
         raise HTTPException(400, "Quantity must be greater than 0.")
 
+    if not data.color and _model_has_colour_specific(db, data.model_id):
+        raise HTTPException(
+            400, "Select a colour — this model has colour-specific parts."
+        )
+
     bom_items = _get_applicable_bom_items(
         db, data.model_id, data.color
     )
@@ -384,13 +450,15 @@ def create_job(
 
     shortages = []
     for bom in bom_items:
-        inv = _find_inventory_item(db, bom)
+        eff_colour = _effective_colour(bom, data.color)
+        eff_sku    = _effective_sku(bom, data.color)
+        inv = _find_inventory_item(db, bom, sku=eff_sku, colour=eff_colour)
         part_name = bom.part_name or (inv.item_name if inv else "Unknown Part")
         required = bom.quantity_required * data.quantity
 
         if not inv:
             shortages.append(f"'{part_name}' — completely missing from inventory (need {required})")
-            continue  
+            continue
 
         if data.location_id:
             loc_stock = db.query(InventoryLocationStock).filter(
@@ -428,8 +496,10 @@ def create_job(
     db.flush()
 
     for bom in bom_items:
-        inv = _find_inventory_item(db, bom)
-        if not inv: continue 
+        eff_colour = _effective_colour(bom, data.color)
+        eff_sku    = _effective_sku(bom, data.color)
+        inv = _find_inventory_item(db, bom, sku=eff_sku, colour=eff_colour)
+        if not inv: continue
 
         required = bom.quantity_required * data.quantity
         inv.consumed_quantity  += required
@@ -518,7 +588,9 @@ def cancel_job(
     )
 
     for bom in bom_items:
-        inv = _find_inventory_item(db, bom)
+        eff_colour = _effective_colour(bom, job.color)
+        eff_sku    = _effective_sku(bom, job.color)
+        inv = _find_inventory_item(db, bom, sku=eff_sku, colour=eff_colour)
         if not inv:
             continue
         returned = bom.quantity_required * job.quantity
@@ -526,7 +598,7 @@ def cancel_job(
         # FIX 8: guard against going negative
         inv.consumed_quantity  = max(0, inv.consumed_quantity - returned)
         inv.remaining_quantity += returned
- 
+
         if job.location_id:
             loc_stock = db.query(InventoryLocationStock).filter(
                 InventoryLocationStock.item_id     == inv.id,
@@ -534,7 +606,7 @@ def cancel_job(
             ).first()
             if loc_stock:
                 loc_stock.quantity += returned
- 
+
         movement = StockMovement(
             id             = gen_uuid(),
             item_id        = inv.id,
@@ -547,12 +619,168 @@ def cancel_job(
             performed_by   = current_user.id,
         )
         db.add(movement)
- 
+
     job.status = AssemblyStatus.cancelled
     db.commit()
     db.refresh(job)
     return _job_to_response(job, db)
  
+# ── ADD BOM STOCK (explode a scooter's BOM into part inventory) ──
+
+@router.post("/add-bom-stock")
+def add_bom_stock(
+    data:         AddBOMStockRequest,
+    db:           Session = Depends(get_db),
+    current_user: User    = Depends(require_manager_or_above),
+):
+    """
+    Inverse of create_job: instead of consuming parts to build scooters,
+    add stock for every part in a model's BOM.
+
+    Quantities are quantity_required * data.quantity. Generic parts are added
+    with no colour; colour-specific parts are materialised with the selected
+    colour and a colour-suffixed SKU (one inventory row per colour). Missing
+    inventory items are auto-created from the BOM row.
+    """
+    from datetime import date as _date
+
+    model = db.query(ScooterModel).filter(
+        ScooterModel.id == data.model_id
+    ).first()
+    if not model:
+        raise HTTPException(404, "Scooter model not found.")
+    if data.quantity <= 0:
+        raise HTTPException(400, "Quantity must be greater than 0.")
+
+    if not data.colour and _model_has_colour_specific(db, data.model_id):
+        raise HTTPException(
+            400, "Select a colour — this model has colour-specific parts."
+        )
+
+    import_date = None
+    if data.import_date:
+        try:
+            import_date = _date.fromisoformat(data.import_date)
+        except ValueError:
+            raise HTTPException(400, "Invalid import_date. Use YYYY-MM-DD.")
+
+    bom_items = _get_applicable_bom_items(db, data.model_id, data.colour)
+    if not bom_items:
+        raise HTTPException(
+            400,
+            f"No BOM defined for {model.model_name}. Please configure the BOM first."
+        )
+
+    note = (
+        f"BOM stock — {model.model_name}"
+        f" ({data.colour or 'no colour'}) × {data.quantity}"
+    )
+    parts_added = []
+
+    for bom in bom_items:
+        eff_colour = _effective_colour(bom, data.colour)
+        eff_sku    = _effective_sku(bom, data.colour)
+        required   = bom.quantity_required * data.quantity
+        inv = _find_inventory_item(db, bom, sku=eff_sku, colour=eff_colour)
+
+        if inv:
+            inv.remaining_quantity += required
+            inv.total_quantity     += required
+            created = False
+        else:
+            # Auto-create the inventory item from the BOM row
+            part_name = bom.part_name or (
+                bom.inventory_item.item_name
+                if bom.inventory_item_id and bom.inventory_item else None
+            )
+            if not part_name:
+                # Nothing identifiable to create — skip safely
+                continue
+            sku = eff_sku or _generate_sku(
+                model.model_code, part_name, eff_colour or ""
+            )
+            # SKU is unique — a deactivated item with this SKU would clash on
+            # insert, so reactivate it instead of creating a duplicate.
+            deactivated = db.query(InventoryItem).filter(
+                InventoryItem.sku       == sku,
+                InventoryItem.is_active == False
+            ).first()
+            if deactivated:
+                deactivated.is_active          = True
+                deactivated.item_name          = part_name
+                deactivated.model_name         = model.model_name
+                deactivated.colour             = eff_colour
+                deactivated.total_quantity     = required
+                deactivated.remaining_quantity = required
+                deactivated.consumed_quantity  = 0
+                deactivated.defective_quantity = 0
+                deactivated.damaged_quantity   = 0
+                deactivated.import_date        = import_date
+                deactivated.location_id        = data.location_id
+                inv = deactivated
+            else:
+                inv = InventoryItem(
+                    id                  = gen_uuid(),
+                    item_name           = part_name,
+                    sku                 = sku,
+                    unit                = "pcs",
+                    total_quantity      = required,
+                    remaining_quantity  = required,
+                    low_stock_threshold = 10,
+                    is_spare_part       = False,
+                    model_name          = model.model_name,
+                    colour              = eff_colour,
+                    import_date         = import_date,
+                    location_id         = data.location_id,
+                )
+                db.add(inv)
+            db.flush()
+            created = True
+
+        # Update / create location stock
+        if data.location_id:
+            loc_stock = db.query(InventoryLocationStock).filter(
+                InventoryLocationStock.item_id     == inv.id,
+                InventoryLocationStock.location_id == data.location_id
+            ).first()
+            if loc_stock:
+                loc_stock.quantity += required
+            else:
+                loc_stock = InventoryLocationStock(
+                    item_id     = inv.id,
+                    location_id = data.location_id,
+                    quantity    = required,
+                )
+                db.add(loc_stock)
+
+        movement = StockMovement(
+            id             = gen_uuid(),
+            item_id        = inv.id,
+            movement_type  = "received",
+            quantity       = required,
+            location_id    = data.location_id,
+            reference_type = "bom_stock",
+            notes          = note,
+            performed_by   = current_user.id,
+        )
+        db.add(movement)
+
+        parts_added.append({
+            "part_name":      inv.item_name,
+            "sku":            inv.sku,
+            "colour":         inv.colour,
+            "quantity_added": required,
+            "created":        created,
+        })
+
+    db.commit()
+    return {
+        "message":     f"Added stock for {len(parts_added)} part(s) from {model.model_name}'s BOM.",
+        "parts_added": parts_added,
+        "total_parts": len(parts_added),
+    }
+
+
 # ── SUMMARY ───────────────────────────────────────────────────
 
 @router.get("/summary")
@@ -595,11 +823,13 @@ def delete_job(
             db, job.model_id, job.color
         )
         for bom in bom_items:
-            inv = _find_inventory_item(db, bom)
+            eff_colour = _effective_colour(bom, job.color)
+            eff_sku    = _effective_sku(bom, job.color)
+            inv = _find_inventory_item(db, bom, sku=eff_sku, colour=eff_colour)
             if not inv:
                 continue
             returned = bom.quantity_required * job.quantity
- 
+
             # FIX 8: guard against going negative
             inv.consumed_quantity  = max(0, inv.consumed_quantity - returned)
             inv.remaining_quantity += returned

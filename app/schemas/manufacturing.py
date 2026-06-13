@@ -9,25 +9,27 @@ from typing import Optional, List
 # ── BOM ───────────────────────────────────────────────────────
 
 class BOMItemCreate(BaseModel):
-    model_id:          str
-    part_name:         str                    # free text — no inventory dependency
-    sku:               Optional[str] = None   # optional, used to match inventory
-    inventory_item_id: Optional[str] = None   # optional backward compat
-    quantity_required: int
-    colour:            Optional[str] = None
-    battery_type:      Optional[str] = None
-    power_spec:        Optional[str] = None
-    notes:             Optional[str] = None
+    model_id:           str
+    part_name:          str                    # free text — no inventory dependency
+    sku:                Optional[str] = None   # optional, used to match inventory
+    inventory_item_id:  Optional[str] = None   # optional backward compat
+    quantity_required:  int
+    colour:             Optional[str] = None
+    is_colour_specific: bool = False           # True = applies to every colour
+    battery_type:       Optional[str] = None
+    power_spec:         Optional[str] = None
+    notes:              Optional[str] = None
 
 
 class BOMItemUpdate(BaseModel):
-    part_name:         Optional[str] = None
-    sku:               Optional[str] = None
-    quantity_required: Optional[int] = None
-    colour:            Optional[str] = None
-    battery_type:      Optional[str] = None
-    power_spec:        Optional[str] = None
-    notes:             Optional[str] = None
+    part_name:          Optional[str] = None
+    sku:                Optional[str] = None
+    quantity_required:  Optional[int] = None
+    colour:             Optional[str] = None
+    is_colour_specific: Optional[bool] = None
+    battery_type:       Optional[str] = None
+    power_spec:         Optional[str] = None
+    notes:              Optional[str] = None
 
 
 class BOMItemResponse(BaseModel):
@@ -40,6 +42,7 @@ class BOMItemResponse(BaseModel):
     item_name:         Optional[str] = None
     quantity_required: int
     colour:            Optional[str] = None
+    is_colour_specific: bool = False
     battery_type:      Optional[str] = None
     power_spec:        Optional[str] = None
     notes:             Optional[str] = None
@@ -62,6 +65,14 @@ class AssemblyJobUpdate(BaseModel):
     status:      Optional[str] = None
     notes:       Optional[str] = None
     location_id: Optional[str] = None
+
+
+class AddBOMStockRequest(BaseModel):
+    model_id:    str
+    colour:      Optional[str] = None
+    quantity:    int                       # number of scooters
+    location_id: Optional[str] = None
+    import_date: Optional[str] = None
 
 
 class AssemblyJobResponse(BaseModel):

@@ -1,4 +1,3 @@
-import re
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QTableWidget, QTableWidgetItem,
@@ -66,16 +65,6 @@ class LoadItemHistoryWorker(QThread):
         except APIError:
             self.done.emit(self.item_id, {}, [])
 
-
-# ── SKU GENERATOR ─────────────────────────────────────────────
-def generate_sku(model_code: str, part_name: str, colour: str = "") -> str:
-    def clean(text):
-        return re.sub(r'[^a-zA-Z0-9]', '', str(text)).upper()[:8]
-    # model_code used as-is — already clean from DB
-    sku = f"{model_code}-{clean(part_name)}"
-    if colour and colour.strip():
-        sku += f"-{clean(colour)}"
-    return sku
 
 # ── SEARCHABLE INPUT ──────────────────────────────────────────
 
@@ -290,23 +279,14 @@ class ImportForm(QWidget):
         self._update_sku()
 
     def _update_sku(self):
-        # Prefer the stored BOM SKU over regenerating
+        # SKU is owned by the BOM / General Parts entry — just display it,
+        # never regenerate, so inventory stays unified with the BOM.
         bom_item = self.part_combo.currentData()
         if isinstance(bom_item, dict) and bom_item.get("sku"):
-            self.sku_label.setText(f"Auto SKU: {bom_item['sku']}  ✓ from BOM")
+            self.sku_label.setText(f"SKU: {bom_item['sku']}  ✓ from BOM")
             self.sku_label.setStyleSheet("color:#16a34a; font-size:11px; font-weight:600;")
-            return
-
-        # Fallback: regenerate from model_code + typed part name
-        model_data = self.model_combo.currentData() or {}
-        model_code = model_data.get("model_code", "") if isinstance(model_data, dict) else ""
-        part       = self.part_combo.currentText().strip()
-        colour     = self.colour_combo.currentData() or ""
-        if model_code and part:
-            self.sku_label.setText(f"Auto SKU: {generate_sku(model_code, part, colour)}")
-            self.sku_label.setStyleSheet("color:#6b7280; font-size:11px; font-style:italic;")
         else:
-            self.sku_label.setText("Auto SKU: —")
+            self.sku_label.setText("SKU: — select a defined part")
             self.sku_label.setStyleSheet("color:#6b7280; font-size:11px; font-style:italic;")
 
     def validate(self) -> str:
@@ -327,6 +307,13 @@ class ImportForm(QWidget):
                 f"'{part}' is not defined in the BOM for {model_name}.\n"
                 "Add it to the BOM in Master Data first, or use 'General / No Specific Model'."
             )
+        if not bom_item.get("sku"):
+            where = "General Parts" if model_code == "GEN" else "BOM"
+            return (
+                f"'{part}' has no SKU defined.\n"
+                f"Set its SKU in Master Data → {where} first — inventory uses that "
+                "SKU to keep parts unified with the BOM."
+            )
         if not self.location_combo.currentData():
             return "Please select a location."
         return ""
@@ -334,17 +321,13 @@ class ImportForm(QWidget):
     def get_data(self) -> dict:
         model_data = self.model_combo.currentData() or {}
         model_name = model_data.get("model_name", "") if isinstance(model_data, dict) else ""
-        model_code = model_data.get("model_code", "") if isinstance(model_data, dict) else ""
         bom_item   = self.part_combo.currentData()
         raw_text   = self.part_combo.currentText().strip()
         part       = raw_text.split("  [")[0].strip() if "  [" in raw_text else raw_text
         colour     = self.colour_combo.currentData() or ""
-        # Use stored BOM SKU if available; for General parts regenerate from part name
-        if isinstance(bom_item, dict) and bom_item.get("sku"):
-            sku = bom_item["sku"]
-        else:
-            prefix = model_code if model_code and model_code != "GEN" else "GEN"
-            sku = generate_sku(prefix, part, colour)
+        # SKU always comes from the BOM / General Parts master entry — the single
+        # source of truth — never regenerated here. validate() guarantees it exists.
+        sku = bom_item.get("sku", "") if isinstance(bom_item, dict) else ""
         return {
             "date":        self.date_input.date().toString("yyyy-MM-dd"),
             "model":       model_name,
@@ -548,6 +531,202 @@ class DefectiveForm(QWidget):
         }
 
 
+# ── SCOOTER (BOM) FORM ────────────────────────────────────────
+
+class ScooterBOMForm(QWidget):
+    """Pick a scooter model + colour + qty; on save the backend explodes the
+    BOM and adds stock for every applicable part (colour-neutral parts always,
+    colour-specific parts only when they match the selected colour)."""
+
+    def __init__(self, model_names, locations, colors=None, parent=None):
+        super().__init__(parent)
+        self._model_names = model_names
+        self._locations   = locations
+        self._colors      = colors or []
+        self._model_id    = None
+        self._bom_parts   = []
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QFormLayout(self)
+        layout.setSpacing(12)
+        layout.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        layout.setHorizontalSpacing(16)
+
+        lbl  = "font-size:13px; font-weight:500; color:#374151;"
+        inp  = "border:1px solid #ddd; border-radius:4px; padding:0 8px; color:#1a1a1a; background:white;"
+        spin = "color:#1a1a1a; background:white; border:1px solid #ddd; border-radius:4px; padding:0 8px;"
+
+        # Date
+        self.date_input = QDateEdit()
+        self.date_input.setDate(QDate.currentDate())
+        self.date_input.setCalendarPopup(True)
+        self.date_input.setFixedHeight(36)
+        self.date_input.setStyleSheet(inp)
+        d = QLabel("Date *"); d.setStyleSheet(lbl)
+        layout.addRow(d, self.date_input)
+
+        # Model (no General option — BOM is model-specific)
+        self.model_combo = QComboBox()
+        self.model_combo.setFixedHeight(36)
+        _setup_model_combo(self.model_combo, self._model_names)
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
+        m = QLabel("Scooter Model *"); m.setStyleSheet(lbl)
+        layout.addRow(m, self.model_combo)
+
+        # Colour
+        self.colour_combo = QComboBox()
+        self.colour_combo.setFixedHeight(36)
+        self.colour_combo.setStyleSheet(inp)
+        self.colour_combo.addItem("— No colour —", "")
+        for cname in self._colors:
+            self.colour_combo.addItem(cname, cname)
+        self.colour_combo.currentIndexChanged.connect(self._update_preview)
+        c = QLabel("Colour"); c.setStyleSheet(lbl)
+        layout.addRow(c, self.colour_combo)
+
+        # Quantity (number of scooters)
+        self.qty_spin = QSpinBox()
+        self.qty_spin.setFixedHeight(36)
+        self.qty_spin.setMinimum(1)
+        self.qty_spin.setMaximum(999999)
+        self.qty_spin.setValue(1)
+        self.qty_spin.setStyleSheet(spin)
+        self.qty_spin.valueChanged.connect(self._update_preview)
+        q = QLabel("No. of Scooters *"); q.setStyleSheet(lbl)
+        layout.addRow(q, self.qty_spin)
+
+        # Location
+        self.location_combo = QComboBox()
+        self.location_combo.setFixedHeight(36)
+        self.location_combo.setStyleSheet(inp)
+        self.location_combo.addItem("-- Select Location --", "")
+        for loc in self._locations:
+            icon = {"factory": "🏭", "warehouse": "🏢", "godown": "📦"}.get(
+                loc.get("location_type", ""), "📍"
+            )
+            self.location_combo.addItem(f"{icon}  {loc['name']}", loc["id"])
+        l = QLabel("Location *"); l.setStyleSheet(lbl)
+        layout.addRow(l, self.location_combo)
+
+        # Preview of parts that will be added
+        self.preview_label = QLabel("← Select a model to preview the BOM parts")
+        self.preview_label.setWordWrap(True)
+        self.preview_label.setStyleSheet(
+            "color:#475569; font-size:11px; background:#f8fafc;"
+            "border:1px solid #e5e7eb; border-radius:6px; padding:8px;"
+        )
+        pv = QLabel("Will Add"); pv.setStyleSheet(lbl)
+        layout.addRow(pv, self.preview_label)
+
+    def _on_model_changed(self):
+        model_data = self.model_combo.currentData() or {}
+        model_name = model_data.get("model_name", "") if isinstance(model_data, dict) else ""
+        self._bom_parts = []
+        self._model_id  = None
+
+        if not model_name:
+            self.preview_label.setText("← Select a model to preview the BOM parts")
+            return
+
+        self.preview_label.setText("Loading BOM parts…")
+        try:
+            models   = APIClient.get("/master/models")
+            model_id = next(
+                (m["id"] for m in models if m["model_name"] == model_name), None
+            )
+            self._model_id = model_id
+            if model_id:
+                self._bom_parts = APIClient.get(f"/manufacturing/bom/{model_id}")
+            else:
+                self.preview_label.setText("Model not found in master data")
+                return
+        except Exception:
+            self.preview_label.setText("Could not load BOM parts")
+            return
+
+        self._update_preview()
+
+    def _applicable_parts(self):
+        """Filter BOM rows the same way the backend does:
+        - colour-specific parts → always apply (materialised with the selected colour)
+        - generic parts (no colour) → always apply
+        - legacy pinned-colour rows → only when they match the selection."""
+        colour = (self.colour_combo.currentData() or "").lower()
+        result = []
+        for item in self._bom_parts:
+            if item.get("is_colour_specific"):
+                result.append(item)
+                continue
+            part_colour = (item.get("colour") or "").strip()
+            if part_colour and part_colour.lower() != colour:
+                continue
+            result.append(item)
+        return result
+
+    def _has_colour_specific(self):
+        return any(i.get("is_colour_specific") for i in self._bom_parts)
+
+    def _update_preview(self):
+        if not self._bom_parts:
+            if self._model_id:
+                self.preview_label.setText("⚠️ No BOM defined for this model — add parts in Master Data → BOM first")
+            return
+
+        selected_colour = self.colour_combo.currentData() or ""
+        if self._has_colour_specific() and not selected_colour:
+            self.preview_label.setText(
+                "🎨 This model has colour-specific parts — select a colour to add stock."
+            )
+            return
+
+        qty   = self.qty_spin.value()
+        parts = self._applicable_parts()
+        if not parts:
+            self.preview_label.setText("⚠️ No applicable BOM parts for this colour selection")
+            return
+
+        lines = []
+        for item in parts:
+            name = item.get("part_name") or item.get("item_name") or "—"
+            per  = item.get("quantity_required", 1) or 1
+            if item.get("is_colour_specific"):
+                tag = f" ({selected_colour})"
+            elif item.get("colour"):
+                tag = f" ({item['colour']})"
+            else:
+                tag = ""
+            lines.append(f"• {name}{tag} × {per * qty}")
+        self.preview_label.setText(
+            f"✅ {len(parts)} part(s) will be added:\n" + "\n".join(lines)
+        )
+
+    def validate(self) -> str:
+        model_data = self.model_combo.currentData()
+        if not model_data or not self._model_id:
+            return "Please select the scooter model."
+        if not self.location_combo.currentData():
+            return "Please select a location."
+        if self._has_colour_specific() and not (self.colour_combo.currentData() or ""):
+            return "Select a colour — this model has colour-specific parts."
+        if not self._applicable_parts():
+            return (
+                "No BOM parts apply for this model / colour.\n"
+                "Configure the BOM in Master Data → BOM first."
+            )
+        return ""
+
+    def get_data(self) -> dict:
+        return {
+            "model_id":    self._model_id,
+            "colour":      self.colour_combo.currentData() or "",
+            "quantity":    self.qty_spin.value(),
+            "location_id": self.location_combo.currentData() or None,
+            "date":        self.date_input.date().toString("yyyy-MM-dd"),
+        }
+
+
 # ── ADD STOCK DIALOG ──────────────────────────────────────────
 
 class AddItemDialog(QDialog):
@@ -582,6 +761,7 @@ class AddItemDialog(QDialog):
         self.type_combo.setFixedHeight(36)
         self.type_combo.addItem("📥  Purchase  (new stock arrived)", "purchase")
         self.type_combo.addItem("⚠️   Defective / Damaged",          "defective")
+        self.type_combo.addItem("🛵  Add Scooter  (explode BOM into parts)", "scooter")
         self.type_combo.setStyleSheet(
             "border:1px solid #ddd; border-radius:6px;"
             "padding:0 8px; color:#1a1a1a; font-size:13px;"
@@ -598,8 +778,10 @@ class AddItemDialog(QDialog):
         self.stack = QStackedWidget()
         self.import_form    = ImportForm(self.model_names, self.part_names, self.locations, self.colors)
         self.defective_form = DefectiveForm(self.model_names, self.part_names, self.colors)
+        self.scooter_form   = ScooterBOMForm(self.model_names, self.locations, self.colors)
         self.stack.addWidget(self.import_form)
         self.stack.addWidget(self.defective_form)
+        self.stack.addWidget(self.scooter_form)
         layout.addWidget(self.stack)
 
         btn_row = QHBoxLayout()
@@ -634,10 +816,16 @@ class AddItemDialog(QDialog):
                 "background:#2563eb; color:white; border:none;"
                 "border-radius:6px; font-weight:600; font-size:13px;"
             )
-        else:
+        elif index == 1:
             self.save_btn.setText("Record Defective / Damaged")
             self.save_btn.setStyleSheet(
                 "background:#dc2626; color:white; border:none;"
+                "border-radius:6px; font-weight:600; font-size:13px;"
+            )
+        else:
+            self.save_btn.setText("Add Scooter Parts")
+            self.save_btn.setStyleSheet(
+                "background:#16a34a; color:white; border:none;"
                 "border-radius:6px; font-weight:600; font-size:13px;"
             )
 
@@ -649,6 +837,12 @@ class AddItemDialog(QDialog):
                 QMessageBox.warning(self, "Missing Fields", error)
                 return
             self.result_data = {"entry_type": "purchase", **self.import_form.get_data()}
+        elif entry_type == "scooter":
+            error = self.scooter_form.validate()
+            if error:
+                QMessageBox.warning(self, "Missing Fields", error)
+                return
+            self.result_data = {"entry_type": "scooter", **self.scooter_form.get_data()}
         else:
             error = self.defective_form.validate()
             if error:
@@ -1926,6 +2120,25 @@ class InventoryScreen(QWidget):
                         f"Part     : {data['part']}\n"
                         f"Model    : {data['model']}\n"
                         f"Quantity : {data['quantity']} pcs"
+                    )
+                elif entry_type == "scooter":
+                    result = APIClient.post("/manufacturing/add-bom-stock", {
+                        "model_id":    data["model_id"],
+                        "colour":      data["colour"] or None,
+                        "quantity":    data["quantity"],
+                        "location_id": data.get("location_id"),
+                        "import_date": data["date"],
+                    })
+                    parts = result.get("parts_added", [])
+                    lines = []
+                    for p in parts:
+                        tag = f" ({p['colour']})" if p.get("colour") else ""
+                        new = "  (new)" if p.get("created") else ""
+                        lines.append(f"• {p['part_name']}{tag} — {p['quantity_added']} pcs{new}")
+                    QMessageBox.information(
+                        self, "Scooter Parts Added",
+                        f"{result.get('message', 'Stock added.')}\n\n"
+                        + "\n".join(lines)
                     )
                 else:
                     existing = next(

@@ -69,13 +69,20 @@ class LoadSummaryWorker(QThread):
 # ── ADD BOM ITEM DIALOG — FREE TEXT + SKU PREVIEW ─────────────
 
 class AddBOMItemDialog(QDialog):
-    def __init__(self, parent, model_id, model_name, model_code=""):
+    def __init__(self, parent, model_id, model_name, model_code="",
+                 is_colour_specific=False, item=None):
         super().__init__(parent)
-        self.model_id    = model_id
-        self.model_name  = model_name
-        self.model_code  = model_code
-        self.result_data = {}
-        self.setWindowTitle(f"Add BOM Part — {model_name}")
+        self.model_id           = model_id
+        self.model_name         = model_name
+        self.model_code         = model_code
+        self.is_colour_specific = is_colour_specific
+        self.item               = item
+        self.is_edit            = item is not None
+        self.result_data        = {}
+        self._sku_edited        = False
+        kind = "Colour-specific Part" if is_colour_specific else "Generic Part"
+        verb = "Edit" if self.is_edit else "Add"
+        self.setWindowTitle(f"{verb} {kind} — {model_name}")
         self.setFixedWidth(500)
         self.setModal(True)
         self._build_ui()
@@ -85,12 +92,25 @@ class AddBOMItemDialog(QDialog):
         layout.setSpacing(14)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        info = QLabel(
-            "Define a part required to build this scooter model.\n"
-            "You can add inventory stock for this part later."
-        )
+        if self.is_colour_specific:
+            info_text = (
+                "🎨 Colour-specific part — comes in every colour.\n"
+                "Enter it once. When you stock or build scooters of a colour, "
+                "a separate inventory row is created for that colour "
+                "(SKU gets the colour appended)."
+            )
+            info_bg, info_fg = "#f5f3ff", "#6d28d9"
+        else:
+            info_text = (
+                "🔩 Generic part — the same for every colour "
+                "(battery, motor, wheels, …).\n"
+                "One inventory row, no colour."
+            )
+            info_bg, info_fg = "#eff6ff", "#1d4ed8"
+
+        info = QLabel(info_text)
         info.setStyleSheet(
-            "background:#eff6ff; color:#1d4ed8; padding:10px 12px;"
+            f"background:{info_bg}; color:{info_fg}; padding:10px 12px;"
             "border-radius:6px; font-size:12px;"
         )
         info.setWordWrap(True)
@@ -110,7 +130,10 @@ class AddBOMItemDialog(QDialog):
         self.name_input = QLineEdit()
         self.name_input.setFixedHeight(36)
         self.name_input.setStyleSheet(inp)
-        self.name_input.setPlaceholderText("e.g. Front Tyre, Motor, Side Panel")
+        self.name_input.setPlaceholderText(
+            "e.g. Body Panel, Side Cover" if self.is_colour_specific
+            else "e.g. Motor, Battery, Front Tyre"
+        )
         self.name_input.textChanged.connect(self._update_sku)
         nl = QLabel("Part Name *"); nl.setStyleSheet(lbl)
         form.addRow(nl, self.name_input)
@@ -125,15 +148,6 @@ class AddBOMItemDialog(QDialog):
         ql = QLabel("Qty per Unit *"); ql.setStyleSheet(lbl)
         form.addRow(ql, self.qty_spin)
 
-        # Colour filter — optional
-        self.colour_input = QLineEdit()
-        self.colour_input.setFixedHeight(36)
-        self.colour_input.setStyleSheet(inp)
-        self.colour_input.setPlaceholderText("e.g. Red — only for Red. Blank = all.")
-        self.colour_input.textChanged.connect(self._update_sku)
-        cl = QLabel("Colour Filter"); cl.setStyleSheet(lbl)
-        form.addRow(cl, self.colour_input)
-
         # Notes
         self.notes_input = QTextEdit()
         self.notes_input.setFixedHeight(50)
@@ -144,12 +158,22 @@ class AddBOMItemDialog(QDialog):
         notl = QLabel("Notes"); notl.setStyleSheet(lbl)
         form.addRow(notl, self.notes_input)
 
-        # SKU preview — generated from model_code + part_name + colour
-        self.sku_preview = QLabel("SKU Preview: —")
-        self.sku_preview.setStyleSheet(
-            "color:#6b7280; font-size:11px; font-style:italic;"
+        # SKU — auto-filled from model_code + part_name (base only), but editable
+        self.sku_input = QLineEdit()
+        self.sku_input.setFixedHeight(36)
+        self.sku_input.setStyleSheet(inp)
+        self.sku_input.setPlaceholderText("Auto-generated — edit to override")
+        self.sku_input.textEdited.connect(self._on_sku_edited)
+        skl = QLabel("SKU"); skl.setStyleSheet(lbl)
+        form.addRow(skl, self.sku_input)
+
+        self.sku_hint = QLabel(
+            "Base SKU — the colour is appended automatically per scooter colour."
+            if self.is_colour_specific
+            else "Auto-filled from model + part. Edit to set a custom SKU."
         )
-        form.addRow("", self.sku_preview)
+        self.sku_hint.setStyleSheet("color:#94a3b8; font-size:11px; font-style:italic;")
+        form.addRow("", self.sku_hint)
 
         layout.addLayout(form)
 
@@ -159,7 +183,7 @@ class AddBOMItemDialog(QDialog):
         cancel_btn.setFixedHeight(38)
         cancel_btn.clicked.connect(self.reject)
         cancel_btn.setStyleSheet("border:1px solid #ddd; border-radius:6px; color:#666;")
-        save_btn = QPushButton("Add Part to BOM")
+        save_btn = QPushButton("Save Changes" if self.is_edit else "Add Part to BOM")
         save_btn.setFixedHeight(38)
         save_btn.setDefault(True)
         save_btn.setStyleSheet(
@@ -170,21 +194,35 @@ class AddBOMItemDialog(QDialog):
         btn_row.addWidget(save_btn)
         layout.addLayout(btn_row)
 
+        # Prefill when editing an existing BOM part
+        if self.is_edit:
+            self.name_input.setText(self.item.get("part_name") or self.item.get("item_name") or "")
+            self.qty_spin.setValue(self.item.get("quantity_required", 1) or 1)
+            self.notes_input.setPlainText(self.item.get("notes") or "")
+            if self.item.get("sku"):
+                # keep the existing SKU; don't let name edits overwrite it
+                self.sku_input.setText(self.item["sku"])
+                self._sku_edited = True
+
     def _update_sku(self):
-        """Generate SKU preview: model_code + part_name + colour"""
+        """Auto-fill the base SKU from model_code + part_name, unless the user
+        has typed their own SKU. Colour is never part of the base SKU."""
+        if self._sku_edited:
+            return
+
         def clean(text):
             return re.sub(r'[^a-zA-Z0-9]', '', str(text)).upper()[:8]
 
-        part   = self.name_input.text().strip()
-        colour = self.colour_input.text().strip()
-
+        part = self.name_input.text().strip()
         if self.model_code and part:
-            sku = f"{clean(self.model_code)}-{clean(part)}"
-            if colour:
-                sku += f"-{clean(colour)}"
-            self.sku_preview.setText(f"SKU Preview: {sku}")
+            self.sku_input.setText(f"{clean(self.model_code)}-{clean(part)}")
         else:
-            self.sku_preview.setText("SKU Preview: —")
+            self.sku_input.setText("")
+
+    def _on_sku_edited(self, text):
+        # Once the user types into the SKU box, stop auto-overwriting it.
+        # Clearing the box resumes auto-generation on the next part change.
+        self._sku_edited = bool(text.strip())
 
     def _save(self):
         name = self.name_input.text().strip()
@@ -192,24 +230,28 @@ class AddBOMItemDialog(QDialog):
             QMessageBox.warning(self, "Missing", "Part name is required.")
             return
 
-        def clean(text):
-            return re.sub(r'[^a-zA-Z0-9]', '', str(text)).upper()[:8]
-            
-        colour = self.colour_input.text().strip()
-        sku = None
-        if self.model_code and name:
-            sku = f"{clean(self.model_code)}-{clean(name)}"
-            if colour:
-                sku += f"-{clean(colour)}"
+        sku = self.sku_input.text().strip().upper() or None
+        if not sku:
+            QMessageBox.warning(
+                self, "Missing",
+                "SKU is required. It auto-fills from the part name — "
+                "type the part name or enter a SKU.\n"
+                "Inventory uses this SKU to keep parts unified with the BOM."
+            )
+            return
 
         self.result_data = {
-            "model_id":          self.model_id,
-            "part_name":         name,
-            "sku":               sku,
-            "quantity_required": self.qty_spin.value(),
-            "colour":            colour or None,
-            "notes":             self.notes_input.toPlainText().strip() or None,
+            "model_id":           self.model_id,
+            "part_name":          name,
+            "sku":                sku,
+            "quantity_required":  self.qty_spin.value(),
+            "is_colour_specific": self.is_colour_specific,
+            "notes":              self.notes_input.toPlainText().strip() or None,
         }
+        # Only set colour on create (None = no colour). On edit we omit it so a
+        # legacy pinned-colour row keeps its colour instead of being cleared.
+        if not self.is_edit:
+            self.result_data["colour"] = None
         self.accept()
 
 
@@ -372,20 +414,28 @@ class BOMTab(QWidget):
         hdr.addStretch()
 
         if Session.role in ["superadmin", "manager"]:
-            self.add_bom_btn = QPushButton("+ Add Part to BOM")
-            self.add_bom_btn.setFixedHeight(34)
-            self.add_bom_btn.setEnabled(False)
-            self.add_bom_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            self.add_bom_btn.setStyleSheet("""
-                QPushButton {
-                    background:#2563eb; color:white; border:none;
-                    border-radius:6px; padding:0 14px; font-weight:600; font-size:12px;
-                }
-                QPushButton:hover { background:#1d4ed8; }
-                QPushButton:disabled { background:#94a3b8; }
-            """)
-            self.add_bom_btn.clicked.connect(self._add_bom_item)
-            hdr.addWidget(self.add_bom_btn)
+            self.add_generic_btn = QPushButton("+ Generic Part")
+            self.add_coloured_btn = QPushButton("+ Colour-specific Part")
+            for b, hover in (
+                (self.add_generic_btn, "#1d4ed8"),
+                (self.add_coloured_btn, "#6d28d9"),
+            ):
+                b.setFixedHeight(34)
+                b.setEnabled(False)
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                base = "#2563eb" if b is self.add_generic_btn else "#7c3aed"
+                b.setStyleSheet(f"""
+                    QPushButton {{
+                        background:{base}; color:white; border:none;
+                        border-radius:6px; padding:0 14px; font-weight:600; font-size:12px;
+                    }}
+                    QPushButton:hover {{ background:{hover}; }}
+                    QPushButton:disabled {{ background:#94a3b8; }}
+                """)
+            self.add_generic_btn.clicked.connect(lambda: self._add_bom_item(False))
+            self.add_coloured_btn.clicked.connect(lambda: self._add_bom_item(True))
+            hdr.addWidget(self.add_generic_btn)
+            hdr.addWidget(self.add_coloured_btn)
 
         right_layout.addLayout(hdr)
 
@@ -395,24 +445,44 @@ class BOMTab(QWidget):
         )
         right_layout.addWidget(self.total_parts_lbl)
 
-        self.bom_table = QTableWidget()
-        self.bom_table.setColumnCount(6)
-        self.bom_table.setHorizontalHeaderLabels([
-            "Part Name", "SKU", "Qty/Unit", "Colour Filter", "Notes", "Actions"
+        # Two sections: generic parts and colour-specific parts
+        gen_hdr = QLabel("🔩 Generic Parts — same for every colour")
+        gen_hdr.setStyleSheet("color:#1e293b; font-size:13px; font-weight:600;")
+        right_layout.addWidget(gen_hdr)
+        self.generic_table = self._make_bom_table()
+        right_layout.addWidget(self.generic_table)
+
+        col_hdr = QLabel("🎨 Colour-specific Parts — stocked per colour")
+        col_hdr.setStyleSheet("color:#6d28d9; font-size:13px; font-weight:600;")
+        right_layout.addWidget(col_hdr)
+        self.coloured_table = self._make_bom_table()
+        right_layout.addWidget(self.coloured_table)
+
+        self.bom_status = QLabel("")
+        self.bom_status.setStyleSheet("color:#94a3b8; font-size:12px;")
+        right_layout.addWidget(self.bom_status)
+
+        layout.addWidget(right, 1)
+
+    def _make_bom_table(self) -> QTableWidget:
+        t = QTableWidget()
+        t.setColumnCount(6)
+        t.setHorizontalHeaderLabels([
+            "Part Name", "SKU", "Qty/Unit", "Colour", "Notes", "Actions"
         ])
-        self.bom_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.bom_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
-        self.bom_table.setColumnWidth(1, 160)
-        self.bom_table.setColumnWidth(2, 70)
-        self.bom_table.setColumnWidth(3, 90)
-        self.bom_table.setColumnWidth(4, 140)
-        self.bom_table.setColumnWidth(5, 80)
-        self.bom_table.verticalHeader().setDefaultSectionSize(38)
-        self.bom_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.bom_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.bom_table.setAlternatingRowColors(True)
-        self.bom_table.verticalHeader().setVisible(False)
-        self.bom_table.setStyleSheet("""
+        t.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        t.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        t.setColumnWidth(1, 160)
+        t.setColumnWidth(2, 70)
+        t.setColumnWidth(3, 90)
+        t.setColumnWidth(4, 140)
+        t.setColumnWidth(5, 96)
+        t.verticalHeader().setDefaultSectionSize(38)
+        t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        t.setAlternatingRowColors(True)
+        t.verticalHeader().setVisible(False)
+        t.setStyleSheet("""
             QTableWidget { border:1px solid #e5e7eb; border-radius:8px; gridline-color:#f3f4f6; }
             QHeaderView::section {
                 background:#f8fafc; padding:8px; border:none;
@@ -422,13 +492,7 @@ class BOMTab(QWidget):
             QTableWidget::item:alternate { background:#f9fafb; }
             QTableWidget::item:selected { background:#eff6ff; color:#1a1a1a; }
         """)
-        right_layout.addWidget(self.bom_table)
-
-        self.bom_status = QLabel("")
-        self.bom_status.setStyleSheet("color:#94a3b8; font-size:12px;")
-        right_layout.addWidget(self.bom_status)
-
-        layout.addWidget(right, 1)
+        return t
 
     def _load_models(self):
         worker = LoadModelsWorker()
@@ -452,9 +516,11 @@ class BOMTab(QWidget):
         self.current_model = model
         self.bom_title.setText(f"BOM — {model['model_name']}  ({model.get('model_code', '')})")
         if Session.role in ["superadmin", "manager"]:
-            self.add_bom_btn.setEnabled(True)
+            self.add_generic_btn.setEnabled(True)
+            self.add_coloured_btn.setEnabled(True)
         self.bom_status.setText("Loading BOM...")
-        self.bom_table.setRowCount(0)
+        self.generic_table.setRowCount(0)
+        self.coloured_table.setRowCount(0)
 
         worker = LoadBOMWorker(model["id"])
         worker.done.connect(self._populate_bom)
@@ -463,7 +529,20 @@ class BOMTab(QWidget):
         worker.start()
 
     def _populate_bom(self, items):
-        self.bom_table.setRowCount(len(items))
+        # A colour-specific part (new flag) or a legacy pinned-colour row both
+        # belong in the coloured section; everything else is generic.
+        coloured = [i for i in items if i.get("is_colour_specific") or i.get("colour")]
+        generic  = [i for i in items if not (i.get("is_colour_specific") or i.get("colour"))]
+        self._fill_bom_table(self.generic_table, generic)
+        self._fill_bom_table(self.coloured_table, coloured)
+
+        self.total_parts_lbl.setText(
+            f"📋 {len(items)} parts  •  🔩 {len(generic)} generic  •  🎨 {len(coloured)} colour-specific"
+        )
+        self.bom_status.setText(f"{len(items)} BOM items for {self.current_model['model_name']}")
+
+    def _fill_bom_table(self, table, items):
+        table.setRowCount(len(items))
 
         def cell(text, align=Qt.AlignmentFlag.AlignLeft):
             c = QTableWidgetItem(str(text) if text else "—")
@@ -472,21 +551,36 @@ class BOMTab(QWidget):
 
         for row, item in enumerate(items):
             display_name = item.get("part_name") or item.get("item_name", "")
-            self.bom_table.setItem(row, 0, cell(display_name))
-            self.bom_table.setItem(row, 1, cell(item.get("sku", "") or "—"))
-            self.bom_table.setItem(row, 2, cell(item.get("quantity_required", ""), Qt.AlignmentFlag.AlignCenter))
+            table.setItem(row, 0, cell(display_name))
+            table.setItem(row, 1, cell(item.get("sku", "") or "—"))
+            table.setItem(row, 2, cell(item.get("quantity_required", ""), Qt.AlignmentFlag.AlignCenter))
 
-            colour = item.get("colour") or ""
-            colour_cell = QTableWidgetItem(colour if colour else "All colours")
+            if item.get("is_colour_specific"):
+                colour_text, colour_fg = "All colours", "#7c3aed"
+            elif item.get("colour"):
+                colour_text, colour_fg = item["colour"], "#7c3aed"   # legacy pinned colour
+            else:
+                colour_text, colour_fg = "—", "#94a3b8"
+            colour_cell = QTableWidgetItem(colour_text)
             colour_cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter)
-            colour_cell.setForeground(QColor("#7c3aed") if colour else QColor("#94a3b8"))
-            self.bom_table.setItem(row, 3, colour_cell)
+            colour_cell.setForeground(QColor(colour_fg))
+            table.setItem(row, 3, colour_cell)
 
-            self.bom_table.setItem(row, 4, cell(item.get("notes", "")))
+            table.setItem(row, 4, cell(item.get("notes", "")))
 
             if Session.role in ["superadmin", "manager"]:
+                edit_btn = QPushButton("✏️")
+                edit_btn.setFixedSize(30, 28)
+                edit_btn.setToolTip("Edit name / SKU")
+                edit_btn.setStyleSheet(
+                    "QPushButton { background:#eff6ff; color:#2563eb; border:none;"
+                    "border-radius:4px; font-size:13px; }"
+                    "QPushButton:hover { background:#dbeafe; }"
+                )
+                edit_btn.clicked.connect(lambda _, i=item: self._edit_bom_item(i))
                 del_btn = QPushButton("🗑️")
-                del_btn.setFixedSize(32, 28)
+                del_btn.setFixedSize(30, 28)
+                del_btn.setToolTip("Remove from BOM")
                 del_btn.setStyleSheet(
                     "QPushButton { background:#fee2e2; color:#dc2626; border:none;"
                     "border-radius:4px; font-size:13px; }"
@@ -495,14 +589,13 @@ class BOMTab(QWidget):
                 del_btn.clicked.connect(lambda _, i=item: self._delete_bom_item(i))
                 w = QWidget()
                 wl = QHBoxLayout(w)
-                wl.setContentsMargins(4, 3, 4, 3)
+                wl.setContentsMargins(2, 3, 2, 3)
+                wl.setSpacing(4)
+                wl.addWidget(edit_btn)
                 wl.addWidget(del_btn)
-                self.bom_table.setCellWidget(row, 5, w)
+                table.setCellWidget(row, 5, w)
 
-        self.total_parts_lbl.setText(f"📋 {len(items)} parts in BOM")
-        self.bom_status.setText(f"{len(items)} BOM items for {self.current_model['model_name']}")
-
-    def _add_bom_item(self):
+    def _add_bom_item(self, is_colour_specific):
         if not self.current_model:
             return
         dlg = AddBOMItemDialog(
@@ -510,11 +603,31 @@ class BOMTab(QWidget):
             self.current_model["id"],
             self.current_model["model_name"],
             self.current_model.get("model_code", ""),
+            is_colour_specific=is_colour_specific,
         )
         if dlg.exec() == QDialog.DialogCode.Accepted:
             try:
                 APIClient.post("/manufacturing/bom", dlg.result_data)
                 QMessageBox.information(self, "Added", "Part added to BOM successfully.")
+                self._on_model_selected(self.model_list.currentItem())
+            except APIError as e:
+                QMessageBox.critical(self, "Error", e.message)
+
+    def _edit_bom_item(self, item):
+        if not self.current_model:
+            return
+        dlg = AddBOMItemDialog(
+            self,
+            self.current_model["id"],
+            self.current_model["model_name"],
+            self.current_model.get("model_code", ""),
+            is_colour_specific=bool(item.get("is_colour_specific")),
+            item=item,
+        )
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            try:
+                APIClient.patch(f"/manufacturing/bom/{item['id']}", dlg.result_data)
+                QMessageBox.information(self, "Saved", "BOM part updated successfully.")
                 self._on_model_selected(self.model_list.currentItem())
             except APIError as e:
                 QMessageBox.critical(self, "Error", e.message)

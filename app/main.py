@@ -42,6 +42,10 @@ def _run_migrations():
         ALTER TABLE damage_records
         ADD COLUMN IF NOT EXISTS part_name_free VARCHAR(300);
         """,
+        """
+        ALTER TABLE bom_items
+        ADD COLUMN IF NOT EXISTS is_colour_specific BOOLEAN DEFAULT FALSE;
+        """,
     ]
     with engine.begin() as conn:
         for sql in migrations:

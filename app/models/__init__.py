@@ -204,6 +204,7 @@ class BOMItem(Base):
     inventory_item_id   = Column(String, ForeignKey("inventory_items.id"), nullable=True)
     quantity_required   = Column(Integer, nullable=False)
     colour              = Column(String(50), nullable=True)
+    is_colour_specific  = Column(Boolean, default=False, nullable=False)
     battery_type        = Column(String(50), nullable=True)
     power_spec          = Column(String(50), nullable=True)
     notes               = Column(Text)
